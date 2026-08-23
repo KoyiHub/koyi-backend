@@ -1,0 +1,44 @@
+# Optional: backing services only. Django itself runs on the host via `uv run`.
+#
+#   make services        # start
+#   make services-down   # stop
+#
+# You only need this if you want a real Celery worker (Redis broker) or a
+# Postgres-backed local database. Plain `make run` needs neither.
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save 60 1 --loglevel warning
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Uncomment to develop against Postgres instead of SQLite, then set
+  # DATABASE_URL=postgres://koyi:koyi@localhost:5432/koyi in .env
+  #
+  # postgres:
+  #   image: postgres:17-alpine
+  #   environment:
+  #     POSTGRES_USER: koyi
+  #     POSTGRES_PASSWORD: koyi
+  #     POSTGRES_DB: koyi
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U koyi"]
+  #     interval: 10s
+  #     timeout: 3s
+  #     retries: 5
+
+volumes:
+  redis_data:
+  # postgres_data:

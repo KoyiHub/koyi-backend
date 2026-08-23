@@ -1,0 +1,191 @@
+[project]
+name = "koyi-backend"
+version = "0.1.0"
+description = "Koyi backend service"
+requires-python = ">=3.13,<3.14"
+
+dependencies = [
+    # Core
+    "django>=5.2,<6.0",
+    "django-environ>=0.12",
+    "psycopg[binary]>=3.2",
+
+    # API
+    "djangorestframework>=3.16",
+    "djangorestframework-simplejwt>=5.5",
+    "drf-spectacular[sidecar]>=0.28",
+    "django-cors-headers>=4.7",
+    "django-filter>=25.1",
+
+    # Async work
+    "celery[redis]>=5.5",
+    "django-celery-beat>=2.8",
+    "django-celery-results>=2.6",
+    "redis>=5.2",
+
+    # Runtime / ops
+    "gunicorn>=23.0",
+    "uvicorn[standard]>=0.34",
+    "whitenoise[brotli]>=6.9",
+    "structlog>=25.1",
+]
+
+[dependency-groups]
+dev = [
+    # Test
+    "pytest>=8.3",
+    "pytest-django>=4.10",
+    "pytest-cov>=6.0",
+    "pytest-xdist>=3.6",
+    "factory-boy>=3.3",
+    "faker>=35.0",
+    "freezegun>=1.5",
+    "pytest-mock>=3.14",
+
+    # Lint / format / types
+    "ruff>=0.9",
+    "mypy>=1.15",
+    "django-stubs[compatible-mypy]>=5.1",
+    "djangorestframework-stubs[compatible-mypy]>=3.15",
+    "pre-commit>=4.1",
+    "djlint>=1.36",
+
+    # Local dev helpers
+    "django-debug-toolbar>=5.0",
+    "django-extensions>=3.2",
+    "ipython>=8.32",
+    "werkzeug>=3.1",
+]
+
+# --------------------------------------------------------------------------
+# uv
+# --------------------------------------------------------------------------
+[tool.uv]
+# This is an application, not a distributable library — don't try to build it.
+package = false
+default-groups = ["dev"]
+
+# --------------------------------------------------------------------------
+# Ruff — linter + formatter (replaces black, isort, flake8, pyupgrade)
+# --------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+extend-exclude = ["*/migrations/*", ".venv", "staticfiles"]
+
+[tool.ruff.lint]
+select = [
+    "F",      # pyflakes
+    "E", "W", # pycodestyle
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "DJ",     # flake8-django
+    "T20",    # flake8-print
+    "SIM",    # flake8-simplify
+    "TID",    # flake8-tidy-imports
+    "RUF",    # ruff-specific
+    "S",      # bandit (security)
+    "N",      # pep8-naming
+    "PTH",    # use pathlib
+    "ARG",    # unused arguments
+]
+ignore = [
+    "S101",   # assert — used everywhere in tests
+    "RUF012", # mutable class attrs need ClassVar — noisy with Django/DRF
+]
+
+[tool.ruff.lint.per-file-ignores]
+"*/tests/*" = ["S105", "S106", "ARG001", "ARG002"]
+"conftest.py" = ["ARG001"]
+"config/settings/*" = ["F403", "F405"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["apps", "config"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# --------------------------------------------------------------------------
+# mypy
+# --------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.13"
+plugins = ["mypy_django_plugin.main", "mypy_drf_plugin.main"]
+strict_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+exclude = ["migrations/", "\\.venv/"]
+
+[[tool.mypy.overrides]]
+# Migrations are generated; tests and factory_boy's declarative DSL are not
+# meaningfully checkable (post_generation hooks receive the instance, not self).
+module = ["*.migrations.*", "*.tests.*", "*.factories", "conftest"]
+ignore_errors = true
+
+[tool.django-stubs]
+django_settings_module = "config.settings.test"
+
+# --------------------------------------------------------------------------
+# pytest
+# --------------------------------------------------------------------------
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = ["test_*.py", "*_test.py"]
+testpaths = ["apps", "tests"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--reuse-db",
+    "--durations=10",
+    "-ra",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: tests that touch external services",
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:celery.*",
+    "ignore::DeprecationWarning:kombu.*",
+]
+
+# --------------------------------------------------------------------------
+# coverage
+# --------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["apps", "config"]
+branch = true
+omit = [
+    "*/migrations/*",
+    "*/tests/*",
+    "*/factories.py",
+    "*/conftest.py",
+    "config/asgi.py",
+    "config/wsgi.py",
+    "manage.py",
+    # Only config.settings.test is exercised by the suite; the others are
+    # verified by `manage.py check --deploy` in CI instead.
+    "config/settings/local.py",
+    "config/settings/production.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 80
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

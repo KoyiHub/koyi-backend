@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  quality:
+    name: Lint & types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - run: uv sync
+
+      - name: Ruff lint
+        run: uv run ruff check --output-format=github .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+      - name: mypy
+        run: uv run mypy apps config
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - run: uv sync
+
+      - name: Check for missing migrations
+        run: uv run python manage.py makemigrations --check --dry-run
+
+      - name: Run tests
+        run: uv run pytest -n auto --cov --cov-report=xml --cov-report=term-missing
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.xml
+
+  security:
+    name: Security checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - run: uv sync
+
+      - name: Django deployment checklist
+        env:
+          # Throwaway, but long/random enough to satisfy security.W009 so the
+          # check only fails on real misconfiguration.
+          DJANGO_SECRET_KEY: J8qT2vLwZx7pRn4kYm3bGh6sDf9cVa1oXu5eIt0wQr8zNl2yPj7M
+          DJANGO_ALLOWED_HOSTS: example.com
+        run: uv run python manage.py check --deploy --fail-level WARNING --settings=config.settings.production
+
+      - name: Known vulnerabilities in dependencies
+        run: uvx pip-audit --strict --progress-spinner=off || true

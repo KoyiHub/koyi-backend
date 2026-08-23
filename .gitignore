@@ -1,0 +1,52 @@
+# --- Secrets & local config --------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Virtualenv / uv ---------------------------------------------------------
+.venv/
+venv/
+env/
+
+# --- Django ------------------------------------------------------------------
+*.sqlite3
+*.sqlite3-journal
+db.sqlite3*
+/media/
+/staticfiles/
+celerybeat-schedule*
+*.log
+
+# --- Test & coverage ---------------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+
+# --- Type checking / linting -------------------------------------------------
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+
+# --- Editors / OS ------------------------------------------------------------
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+.DS_Store
