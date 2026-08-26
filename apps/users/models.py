@@ -5,6 +5,7 @@ from django.db import models
 from django.db.models.functions import Lower
 from django.utils.translation import gettext_lazy as _
 
+from apps.common.enums import UserRole
 from apps.common.models import BaseModel
 from apps.users.managers import UserManager
 
@@ -12,8 +13,13 @@ from apps.users.managers import UserManager
 class User(AbstractBaseUser, PermissionsMixin, BaseModel):
     """Email-authenticated user with a UUID primary key.
 
-    Swapping in a custom user model later is a painful migration, so the
-    project starts with one even though it adds little today.
+    This is the single credential store for everyone who logs in: product
+    admins, school management accounts and teachers. The domain profile
+    (`schools.School`, `schools.Teacher`) hangs off it one-to-one, so password
+    hashing, throttling, JWT issuance and the admin all keep working unchanged.
+
+    Students never get a row here — they do not log in with credentials; see
+    `apps.student_portal.authentication`.
     """
 
     email = models.EmailField(_("email address"), unique=True, db_index=True)
@@ -26,6 +32,14 @@ class User(AbstractBaseUser, PermissionsMixin, BaseModel):
         help_text=_("Unselect this instead of deleting accounts."),
     )
     is_staff = models.BooleanField(_("staff status"), default=False)
+    role = models.CharField(
+        _("role"),
+        max_length=16,
+        choices=UserRole.choices,
+        default=UserRole.ADMIN,
+        db_index=True,
+        help_text=_("Which product surface this identity may sign in to."),
+    )
     email_verified = models.BooleanField(_("email verified"), default=False)
 
     last_login_ip = models.GenericIPAddressField(null=True, blank=True, editable=False)
@@ -44,6 +58,9 @@ class User(AbstractBaseUser, PermissionsMixin, BaseModel):
             # Belt-and-braces against Alice@x.com / alice@x.com both registering.
             models.UniqueConstraint(Lower("email"), name="user_email_ci_unique"),
         ]
+        indexes = [
+            models.Index(fields=["role", "is_active"], name="user_role_active_idx"),
+        ]
 
     def __str__(self) -> str:
         return self.email
@@ -61,3 +78,11 @@ class User(AbstractBaseUser, PermissionsMixin, BaseModel):
 
     def get_short_name(self) -> str:
         return self.first_name or self.email
+
+    @property
+    def is_school_admin(self) -> bool:
+        return self.role == UserRole.SCHOOL
+
+    @property
+    def is_teacher(self) -> bool:
+        return self.role == UserRole.TEACHER
