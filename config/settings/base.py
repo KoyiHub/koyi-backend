@@ -59,8 +59,19 @@ THIRD_PARTY_APPS = [
 ]
 
 LOCAL_APPS = [
+    # Shared plumbing.
     "apps.common",
     "apps.users",
+    # Domain — models live here and nowhere else.
+    "apps.media_assets",
+    "apps.schools",
+    "apps.curriculum",
+    "apps.assessments",
+    "apps.activities",
+    # Product surfaces — API only: routes, auth, permissions, services.
+    "apps.school_portal",
+    "apps.teacher_portal",
+    "apps.student_portal",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS

@@ -29,6 +29,8 @@ class UserManager(BaseUserManager["User"]):
         extra.setdefault("is_superuser", True)
         extra.setdefault("is_active", True)
         extra.setdefault("email_verified", True)
+        # Superusers are product admins; they never own a School or Teacher row.
+        extra.setdefault("role", "admin")
 
         if extra.get("is_staff") is not True:
             raise ValueError("Superuser must have is_staff=True.")
