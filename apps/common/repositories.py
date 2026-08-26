@@ -9,15 +9,13 @@ decide what a missing row means.
 """
 
 from collections.abc import Iterable, Sequence
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 from django.db import models
 from django.db.models import QuerySet
 
-ModelT = TypeVar("ModelT", bound=models.Model)
 
-
-class BaseRepository(Generic[ModelT]):
+class BaseRepository[ModelT: models.Model]:
     """CRUD primitives for one model.
 
     Subclasses set `model` and add query methods that express domain intent.
@@ -43,8 +41,9 @@ class BaseRepository(Generic[ModelT]):
     def all(self) -> QuerySet[ModelT]:
         return self.get_queryset()
 
-    def filter(self, **kwargs: Any) -> QuerySet[ModelT]:
-        return self.get_queryset().filter(**kwargs)
+    def filter(self, *args: Any, **kwargs: Any) -> QuerySet[ModelT]:
+        """Positional args are `Q` objects, as with `QuerySet.filter`."""
+        return self.get_queryset().filter(*args, **kwargs)
 
     def get(self, **kwargs: Any) -> ModelT:
         """Fetch one row. Raises `Model.DoesNotExist` — callers translate it."""

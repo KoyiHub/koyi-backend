@@ -179,9 +179,7 @@ class Question(BaseModel):
         ]
         constraints = [
             models.CheckConstraint(
-                condition=models.Q(
-                    level__gte=MIN_QUESTION_LEVEL, level__lte=MAX_QUESTION_LEVEL
-                ),
+                condition=models.Q(level__gte=MIN_QUESTION_LEVEL, level__lte=MAX_QUESTION_LEVEL),
                 name="question_level_in_range",
             ),
         ]

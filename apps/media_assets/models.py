@@ -18,7 +18,9 @@ class MediaAsset(BaseModel):
     url = models.URLField(_("url"), max_length=1000)
     mime_type = models.CharField(_("mime type"), max_length=127)
     original_filename = models.CharField(_("original filename"), max_length=255)
-    size_bytes = models.PositiveBigIntegerField(_("size in bytes"), validators=[MinValueValidator(1)])
+    size_bytes = models.PositiveBigIntegerField(
+        _("size in bytes"), validators=[MinValueValidator(1)]
+    )
     # Fractional seconds matter for short prompts, so this is not an integer.
     duration_seconds = models.DecimalField(
         _("duration in seconds"),

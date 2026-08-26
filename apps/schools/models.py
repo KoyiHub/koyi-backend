@@ -204,9 +204,7 @@ class Teacher(BaseModel):
         verbose_name_plural = _("teachers")
         ordering = ["last_name", "first_name"]
         constraints = [
-            models.UniqueConstraint(
-                Upper("teacher_id"), name="teacher_id_ci_unique"
-            ),
+            models.UniqueConstraint(Upper("teacher_id"), name="teacher_id_ci_unique"),
         ]
         indexes = [
             models.Index(fields=["school", "school_class"], name="teacher_school_class_idx"),
