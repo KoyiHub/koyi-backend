@@ -13,7 +13,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from apps.school_portal.authentication import SchoolTokenObtainPairSerializer
+from apps.school_portal.authentication import (
+    SchoolTokenObtainPairSerializer,
+    TeacherTokenObtainPairSerializer,
+)
 from apps.school_portal.permissions import IsSchoolAdmin, IsVerifiedSchoolAdmin, SchoolScopedMixin
 from apps.school_portal.repositories import (
     AssessmentOversightRepository,
@@ -71,6 +74,14 @@ class SchoolLoginView(TokenObtainPairView):
     """Exchange school credentials for a token pair. Teachers are refused here."""
 
     serializer_class = SchoolTokenObtainPairSerializer
+    permission_classes = [AllowAny]
+
+
+@extend_schema(tags=SCHOOL_AUTH_TAG)
+class TeacherLoginView(TokenObtainPairView):
+    """Exchange a teacher id, school id, and password for a token pair."""
+
+    serializer_class = TeacherTokenObtainPairSerializer
     permission_classes = [AllowAny]
 
 
