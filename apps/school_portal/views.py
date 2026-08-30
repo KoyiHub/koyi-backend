@@ -13,6 +13,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from apps.common.enums import UserRole
+from apps.common.services import ValidationError
 from apps.school_portal.authentication import (
     SchoolTokenObtainPairSerializer,
     TeacherTokenObtainPairSerializer,
@@ -40,9 +42,11 @@ from apps.school_portal.services import (
     SchoolOverviewService,
     SchoolProfileService,
     SchoolRegistrationService,
+    SchoolVerificationService,
     StudentManagementService,
     TeacherManagementService,
 )
+from apps.users.models import User
 
 SCHOOL_AUTH_TAG = ["school: auth"]
 SCHOOL_TAG = ["school"]
@@ -66,7 +70,67 @@ class SchoolRegisterView(generics.CreateAPIView):
         data = dict(serializer.validated_data)
         data.pop("password_confirm")
         school = SchoolRegistrationService().register(**data)
-        return Response(SchoolSerializer(school).data, status=status.HTTP_201_CREATED)
+        response_data = SchoolSerializer(school).data
+        return Response(response_data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(tags=SCHOOL_AUTH_TAG)
+class SchoolVerifyEmailView(APIView):
+    """Confirm a school email through the signed link sent at registration."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request: Request) -> Response:
+        token = request.query_params.get("token")
+        if not token:
+            raise ValidationError("Verification token is required.")
+        user = SchoolVerificationService.verify_email(token)
+        return Response(
+            {
+                "message": "Email verified successfully.",
+                "email": user.email,
+                "email_verified": True,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def post(self, request: Request) -> Response:
+        token = request.data.get("token")
+        if not token:
+            raise ValidationError("Verification token is required.")
+        user = SchoolVerificationService.verify_email(token)
+        return Response(
+            {
+                "message": "Email verified successfully.",
+                "email": user.email,
+                "email_verified": True,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+@extend_schema(tags=SCHOOL_AUTH_TAG)
+class SchoolResendVerificationView(APIView):
+    """Resend the school verification email with a short throttle window."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request: Request) -> Response:
+        email = (
+            (request.data.get("email") or request.query_params.get("email") or "").strip().lower()
+        )
+        if not email:
+            raise ValidationError("Email address is required.")
+
+        user = User.objects.filter(email__iexact=email).first()
+        if user is None or user.role != UserRole.SCHOOL:
+            raise ValidationError("No school account was found for that email.")
+
+        SchoolVerificationService.send_verification_email(user)
+        return Response(
+            {"message": "Verification email sent.", "email": user.email},
+            status=status.HTTP_200_OK,
+        )
 
 
 @extend_schema(tags=SCHOOL_AUTH_TAG)

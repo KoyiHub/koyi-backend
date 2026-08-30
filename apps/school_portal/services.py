@@ -5,12 +5,19 @@ Views call these; they never touch the ORM directly. Anything that creates a
 teacher creation can never leave a login account with nothing behind it.
 """
 
+import time
+from urllib.parse import urlencode
+
+from django.conf import settings
+from django.core.cache import cache
+from django.core.mail import send_mail
+from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 from django.db import IntegrityError, transaction
 from django.db.models import Avg, Count, Q
 
 from apps.assessments.enums import AssessmentStatus, ResultStatus
 from apps.common.enums import UserRole
-from apps.common.services import BaseService, NotFoundError, ValidationError
+from apps.common.services import BaseService, NotFoundError, ThrottleError, ValidationError
 from apps.school_portal.repositories import (
     AssessmentOversightRepository,
     ReferenceDataRepository,
@@ -26,6 +33,93 @@ from apps.users.models import User
 #: two admissions to interleave inside the same millisecond, so one retry
 #: already covers realistic contention; three makes it a non-event.
 ID_GENERATION_ATTEMPTS = 3
+EMAIL_VERIFICATION_TTL_SECONDS = 60 * 60 * 24 * 2
+EMAIL_VERIFICATION_RESEND_SECONDS = 60
+EMAIL_VERIFICATION_SALT = "school-email-verification"
+
+
+class SchoolVerificationService(BaseService):
+    """Issues and validates school email verification links."""
+
+    @staticmethod
+    def build_token(user: User) -> str:
+        return TimestampSigner(salt=EMAIL_VERIFICATION_SALT).sign(str(user.pk))
+
+    @staticmethod
+    def build_verification_url(user: User, *, base_url: str | None = None) -> str:
+        token = SchoolVerificationService.build_token(user)
+        if base_url is not None:
+            return f"{base_url.rstrip('/')}?{urlencode({'token': token})}"
+        return (
+            f"{settings.PUBLIC_BASE_URL or 'http://localhost:8000'}"
+            f"/api/v1/schools/verify-email/?{urlencode({'token': token})}"
+        )
+
+    @staticmethod
+    def validate_token(token: str) -> User:
+        try:
+            user_pk = TimestampSigner(salt=EMAIL_VERIFICATION_SALT).unsign(
+                token, max_age=EMAIL_VERIFICATION_TTL_SECONDS
+            )
+        except (BadSignature, SignatureExpired) as exc:
+            raise ValidationError("This verification link is invalid or expired.") from exc
+
+        user = User.objects.filter(pk=user_pk).first()
+        if user is None:
+            raise ValidationError("This verification link is invalid or expired.")
+        return user
+
+    @staticmethod
+    def can_resend(user: User) -> bool:
+        key = f"school-email-verification:{user.pk}:last_sent"
+        last_sent = cache.get(key)
+        if last_sent is None:
+            return True
+        return last_sent + EMAIL_VERIFICATION_RESEND_SECONDS <= time.time()
+
+    @staticmethod
+    def send_verification_email(user: User, *, base_url: str | None = None) -> bool:
+        if user.role != UserRole.SCHOOL:
+            raise ValidationError("Only school accounts can receive email verification.")
+        if user.email_verified:
+            return False
+
+        if not SchoolVerificationService.can_resend(user):
+            raise ThrottleError(
+                "Please wait a moment before requesting another verification email."
+            )
+
+        verification_url = SchoolVerificationService.build_verification_url(user, base_url=base_url)
+        subject = "Verify your school email"
+        body = (
+            "Hello,\n\n"
+            "Please verify your school email by visiting the link below:\n\n"
+            f"{verification_url}\n\n"
+            "If you did not create this school account, you can ignore this email."
+        )
+        send_mail(
+            subject=subject,
+            message=body,
+            from_email=None,
+            recipient_list=[user.email],
+        )
+        cache.set(
+            f"school-email-verification:{user.pk}:last_sent",
+            time.time(),
+            timeout=EMAIL_VERIFICATION_RESEND_SECONDS * 2,
+        )
+        return True
+
+    @staticmethod
+    def verify_email(token: str) -> User:
+        user = SchoolVerificationService.validate_token(token)
+        if user.role != UserRole.SCHOOL:
+            raise ValidationError("Only school accounts can be verified.")
+        if user.email_verified:
+            return user
+        user.email_verified = True
+        user.save(update_fields=["email_verified"])
+        return user
 
 
 class SchoolRegistrationService(BaseService):
@@ -59,7 +153,7 @@ class SchoolRegistrationService(BaseService):
             role=UserRole.SCHOOL,
             first_name=name[:150],
         )
-        return School.objects.create(
+        school = School.objects.create(
             user=user,
             name=name,
             abbreviation=abbreviation,
@@ -67,6 +161,8 @@ class SchoolRegistrationService(BaseService):
             current_session=current_session,
             logo=logo,
         )
+        SchoolVerificationService.send_verification_email(user)
+        return school
 
 
 class SchoolProfileService(BaseService):

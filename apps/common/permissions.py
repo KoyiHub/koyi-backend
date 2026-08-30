@@ -76,7 +76,9 @@ class IsVerifiedSchoolAdmin(IsSchoolAdmin):
     message = "Verify your school email address before using this feature."
 
     def has_permission(self, request: Request, view: Any) -> bool:
-        return super().has_permission(request, view) and request.user.email_verified
+        return super().has_permission(request, view) and (
+        hasattr(request.user, "email_verified") and request.user.email_verified
+    )
 
 
 # ---------------------------------------------------------------------------

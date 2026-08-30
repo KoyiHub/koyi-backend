@@ -10,6 +10,8 @@ urlpatterns = [
     path("auth/school-admin/login/", views.SchoolLoginView.as_view()),
     # Registration + the school's own profile
     path("schools/register/", views.SchoolRegisterView.as_view()),
+    path("schools/verify-email/", views.SchoolVerifyEmailView.as_view()),
+    path("schools/verify-email/resend/", views.SchoolResendVerificationView.as_view()),
     path("schools/me/", views.SchoolProfileView.as_view()),
     path("schools/me/overview/", views.SchoolOverviewView.as_view()),
     # Reference data

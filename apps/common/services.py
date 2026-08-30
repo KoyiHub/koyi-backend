@@ -34,6 +34,12 @@ class AuthenticationError(ApplicationError):
     error_type = "authentication_failed"
 
 
+class ThrottleError(ApplicationError):
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    default_message = "Too many requests. Please wait before retrying."
+    error_type = "throttled"
+
+
 class BaseService:
     """Marker base so services are greppable and share a construction style."""
 
