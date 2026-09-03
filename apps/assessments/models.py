@@ -1,20 +1,36 @@
 """Papers, sittings and their results.
 
+An assessment is built from *sections*. A section is one sitting: it covers a
+single domain and whatever skills the teacher chose, spanning mixed FLN
+levels. Children work through sections one at a time, on different days if
+need be, which is why the timer and the unlock state live on the section
+rather than on the paper.
+
 Assessment questions are *copies*, not references, of `curriculum.Question`.
 That duplication is deliberate: once a paper has been sat, editing the source
 question in the bank must not silently change what a student was asked or how
-they were marked.
+they were marked. `source_question` records where a copy came from — null when
+the teacher authored it directly — which is what makes it possible to compare
+a child's performance on the same item across two rounds.
 """
 
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.db.models.functions import Upper
 from django.utils.translation import gettext_lazy as _
 
-from apps.assessments.enums import AssessmentStatus, ErrorType, GradedBy, ResultStatus
+from apps.assessments.enums import (
+    AssessmentStatus,
+    ErrorType,
+    GradedBy,
+    ResultStatus,
+    SectionResultStatus,
+)
 from apps.common.enums import (
     MAX_FLN_LEVEL,
     MIN_FLN_LEVEL,
     ContentBlockType,
+    Domain,
     OptionType,
     QuestionLayout,
     QuestionType,
@@ -28,7 +44,13 @@ LEVEL_VALIDATORS = [
 
 
 class Assessment(BaseModel):
-    """A paper set for one class, in one subject, within a session."""
+    """A diagnostic paper, built from one or more sections.
+
+    Carries no class, subject or difficulty: children are grouped by
+    demonstrated level rather than by year group, and the domain comes from
+    each section. What it does carry is `code` — the short string a child
+    types alongside their student id to open a sitting.
+    """
 
     school = models.ForeignKey(
         "schools.School",
@@ -55,43 +77,118 @@ class Assessment(BaseModel):
     )
     name = models.CharField(_("name"), max_length=255)
     instructions = models.TextField(_("instructions"), blank=True)
-    due_date = models.DateTimeField(_("due date"))
-    timer = models.DurationField(
-        _("timer"),
-        null=True,
+    code = models.CharField(
+        _("code"),
+        max_length=16,
         blank=True,
-        help_text=_("Time allowed per attempt. Null means untimed."),
+        help_text=_("Typed by the child to open a sitting. Minted at publish."),
     )
     status = models.CharField(
         _("status"),
         max_length=16,
         choices=AssessmentStatus.choices,
-        default=AssessmentStatus.PENDING,
+        default=AssessmentStatus.DRAFT,
     )
-    assigned_students = models.ManyToManyField(
-        "schools.Student",
-        related_name="assessments",
+    opens_at = models.DateTimeField(_("opens at"), null=True, blank=True)
+    closes_at = models.DateTimeField(
+        _("closes at"),
+        null=True,
         blank=True,
-        verbose_name=_("assigned students"),
+        help_text=_("After this, sittings stop and grouping may run."),
     )
+    published_at = models.DateTimeField(_("published at"), null=True, blank=True)
 
     class Meta:
         verbose_name = _("assessment")
         verbose_name_plural = _("assessments")
-        ordering = ["-due_date"]
+        ordering = ["-created_at"]
+        constraints = [
+            # Blank while a draft, unique once minted. A partial constraint
+            # rather than `unique=True` so many drafts can coexist.
+            models.UniqueConstraint(
+                Upper("code"),
+                condition=~models.Q(code=""),
+                name="assessment_code_ci_unique",
+            ),
+        ]
         indexes = [
-            # The dashboard lists "my school's active papers, soonest first".
-            models.Index(fields=["school", "status", "-due_date"], name="assess_school_status_idx"),
+            models.Index(
+                fields=["school", "status", "-created_at"], name="assess_school_status_idx"
+            ),
             models.Index(fields=["teacher", "status"], name="assess_teacher_status_idx"),
+            models.Index(fields=["code"], name="assess_code_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.code})" if self.code else self.name
+
+    @property
+    def is_editable(self) -> bool:
+        """Whether sections and questions may still be changed."""
+        return self.status in AssessmentStatus.editable()
+
+    @property
+    def is_sittable(self) -> bool:
+        """Whether a child may start or continue a section."""
+        return self.status in AssessmentStatus.sittable()
+
+    @property
+    def total_points(self):
+        return (
+            AssessmentQuestion.objects.filter(assessment=self).aggregate(total=models.Sum("point"))[
+                "total"
+            ]
+            or 0
+        )
+
+
+class AssessmentSection(BaseModel):
+    """One sitting: a single domain, a chosen set of skills, mixed levels.
+
+    Sections exist so a Grade 1 child is never asked to sit an hour-long paper
+    in one go. They are worked through in `order`, each unlocking the next, and
+    each may be taken on a different day.
+
+    `covers` records which subskills the section is *meant* to probe, so the
+    authoring UI can warn about a coverage gap before a child ever sits it
+    rather than leaving it to be discovered at placement.
+    """
+
+    assessment = models.ForeignKey(
+        Assessment, on_delete=models.CASCADE, related_name="sections", verbose_name=_("assessment")
+    )
+    domain = models.CharField(_("domain"), max_length=16, choices=Domain.choices)
+    name = models.CharField(_("name"), max_length=255)
+    instructions = models.TextField(_("instructions"), blank=True)
+    order = models.PositiveSmallIntegerField(_("order"))
+    timer = models.DurationField(
+        _("timer"),
+        null=True,
+        blank=True,
+        help_text=_("Time allowed for this sitting. Null means untimed."),
+    )
+    covers = models.ManyToManyField(
+        "curriculum.Subskill",
+        related_name="assessment_sections",
+        blank=True,
+        verbose_name=_("covers"),
+    )
+
+    class Meta:
+        verbose_name = _("assessment section")
+        verbose_name_plural = _("assessment sections")
+        ordering = ["assessment", "order"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["assessment", "order"], name="assessment_section_order_unique"
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["assessment", "order"], name="section_assess_order_idx"),
         ]
 
     def __str__(self) -> str:
         return self.name
-
-    @property
-    def is_open(self) -> bool:
-        """Whether a student may still start or continue an attempt."""
-        return self.status == AssessmentStatus.ACTIVE
 
     @property
     def total_points(self):
@@ -99,8 +196,19 @@ class Assessment(BaseModel):
 
 
 class AssessmentQuestion(BaseModel):
-    """A question as it appears on one paper."""
+    """A question as it appears on one paper.
 
+    `assessment` is denormalised from `section.assessment` so that "every
+    question on this paper" and "every response to this paper" stay
+    single-table reads during marking and analytics.
+    """
+
+    section = models.ForeignKey(
+        AssessmentSection,
+        on_delete=models.CASCADE,
+        related_name="questions",
+        verbose_name=_("section"),
+    )
     assessment = models.ForeignKey(
         Assessment, on_delete=models.CASCADE, related_name="questions", verbose_name=_("assessment")
     )
@@ -149,10 +257,10 @@ class AssessmentQuestion(BaseModel):
     class Meta:
         verbose_name = _("assessment question")
         verbose_name_plural = _("assessment questions")
-        ordering = ["assessment", "order"]
+        ordering = ["section", "order"]
         constraints = [
             models.UniqueConstraint(
-                fields=["assessment", "order"], name="assessment_question_order_unique"
+                fields=["section", "order"], name="assessment_question_order_unique"
             ),
             models.CheckConstraint(
                 condition=models.Q(fln_level__gte=MIN_FLN_LEVEL, fln_level__lte=MAX_FLN_LEVEL),
@@ -172,7 +280,7 @@ class AssessmentQuestion(BaseModel):
             # the same slot; the unique constraint rejects the loser and the
             # authoring service retries.
             highest = AssessmentQuestion.objects.filter(  # type: ignore[unreachable]
-                assessment_id=self.assessment_id
+                section_id=self.section_id
             ).aggregate(top=models.Max("order"))["top"]
             self.order = (highest or 0) + 1
         return super().save(*args, **kwargs)
@@ -419,6 +527,66 @@ class AssessmentQuestionResponseOption(BaseModel):
         return f"{self.assessment_question_response_id} → {self.assessment_question_option_id}"
 
 
+class AssessmentAssignment(BaseModel):
+    """That a given child is expected to sit a given paper.
+
+    Assignment is per assessment, not per section: a child is given the whole
+    paper and works through its sections in order. Per-section progress lives
+    on `AssessmentSectionResult`.
+
+    The guardian link is a signed token delivered out of band; only its hash is
+    stored, so a leaked database row cannot be replayed to open a sitting.
+    """
+
+    assessment = models.ForeignKey(
+        Assessment,
+        on_delete=models.CASCADE,
+        related_name="assignments",
+        verbose_name=_("assessment"),
+    )
+    student = models.ForeignKey(
+        "schools.Student",
+        on_delete=models.CASCADE,
+        related_name="assignments",
+        verbose_name=_("student"),
+    )
+    assigned_by = models.ForeignKey(
+        "schools.Teacher",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assignments_made",
+        verbose_name=_("assigned by"),
+    )
+    status = models.CharField(
+        _("status"),
+        max_length=16,
+        choices=ResultStatus.choices,
+        default=ResultStatus.NOT_STARTED,
+    )
+    started_at = models.DateTimeField(_("started at"), null=True, blank=True)
+    submitted_at = models.DateTimeField(_("submitted at"), null=True, blank=True)
+    access_token_hash = models.CharField(_("access token hash"), max_length=128, blank=True)
+    token_expires_at = models.DateTimeField(_("token expires at"), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("assessment assignment")
+        verbose_name_plural = _("assessment assignments")
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["assessment", "student"], name="assignment_assessment_student_unique"
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["assessment", "status"], name="assignment_assess_status_idx"),
+            models.Index(fields=["student", "-created_at"], name="assignment_student_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.student_id} → {self.assessment_id}"
+
+
 class AssessmentResult(BaseModel):
     """One student's outcome on one paper. Created when the paper is assigned,
     so "not started" is a real row rather than an absence."""
@@ -448,6 +616,20 @@ class AssessmentResult(BaseModel):
         choices=ResultStatus.choices,
         default=ResultStatus.NOT_STARTED,
     )
+    # Rolled up once at marking time. The teacher's results table reads these
+    # for every student on the paper, so recomputing them per row would mean a
+    # scan of every response in the class.
+    items_attempted = models.PositiveSmallIntegerField(_("items attempted"), default=0)
+    items_correct = models.PositiveSmallIntegerField(_("items correct"), default=0)
+    percentage = models.DecimalField(
+        _("percentage"),
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
+    marked_at = models.DateTimeField(_("marked at"), null=True, blank=True)
 
     class Meta:
         verbose_name = _("assessment result")
@@ -465,6 +647,68 @@ class AssessmentResult(BaseModel):
 
     def __str__(self) -> str:
         return f"{self.student_id} — {self.assessment_id}: {self.status}"
+
+
+class AssessmentSectionResult(BaseModel):
+    """One student's progress through one section.
+
+    Sections unlock in order, so this is also the unlock state: the first
+    section is unlocked when the paper is assigned and each submission unlocks
+    the next. When the last one is submitted the assessment finalises itself —
+    there is no separate submit step, because a child who completes everything
+    and misses a final button would lose the whole sitting.
+    """
+
+    result = models.ForeignKey(
+        AssessmentResult,
+        on_delete=models.CASCADE,
+        related_name="section_results",
+        verbose_name=_("result"),
+    )
+    section = models.ForeignKey(
+        AssessmentSection,
+        on_delete=models.CASCADE,
+        related_name="results",
+        verbose_name=_("section"),
+    )
+    status = models.CharField(
+        _("status"),
+        max_length=16,
+        choices=SectionResultStatus.choices,
+        default=SectionResultStatus.LOCKED,
+    )
+    score = models.DecimalField(
+        _("score"),
+        max_digits=7,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+    )
+    items_attempted = models.PositiveSmallIntegerField(_("items attempted"), default=0)
+    items_correct = models.PositiveSmallIntegerField(_("items correct"), default=0)
+    started_at = models.DateTimeField(_("started at"), null=True, blank=True)
+    submitted_at = models.DateTimeField(_("submitted at"), null=True, blank=True)
+    expires_at = models.DateTimeField(
+        _("expires at"),
+        null=True,
+        blank=True,
+        help_text=_("When a timed sitting must end. Set from the section timer on start."),
+    )
+
+    class Meta:
+        verbose_name = _("assessment section result")
+        verbose_name_plural = _("assessment section results")
+        ordering = ["result", "section__order"]
+        constraints = [
+            models.UniqueConstraint(fields=["result", "section"], name="section_result_unique"),
+        ]
+        indexes = [
+            models.Index(fields=["result", "status"], name="section_result_status_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.result_id} → {self.section_id}: {self.status}"
 
 
 class AssessmentAnalytics(BaseModel):

@@ -88,7 +88,7 @@ class AssessmentOversightRepository(TenantScopedRepository):
 
     def with_result_counts(self) -> QuerySet[Assessment]:
         return self.get_queryset().annotate(
-            assigned_count=Count("assigned_students", distinct=True),
+            assigned_count=Count("assignments", distinct=True),
             graded_count=Count(
                 "results", filter=Q(results__status=ResultStatus.GRADED), distinct=True
             ),

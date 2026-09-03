@@ -3,11 +3,38 @@ from django.utils.translation import gettext_lazy as _
 
 
 class AssessmentStatus(models.TextChoices):
-    """Lifecycle of the paper itself, set by the teacher."""
+    """Lifecycle of the paper itself.
 
-    PENDING = "pending", _("Pending")
-    ACTIVE = "active", _("Active")
-    COMPLETED = "completed", _("Completed")
+    `DRAFT` is where a teacher builds: sections and questions can be added,
+    edited and removed freely. `publish` is the one-way door — it validates,
+    snapshots every selected bank question, mints the code children type, and
+    from then on the paper is immutable because children may already have sat
+    it. `CLOSED` stops new sittings; marking and placement run afterwards.
+    """
+
+    DRAFT = "draft", _("Draft")
+    PUBLISHED = "published", _("Published")
+    OPEN = "open", _("Open")
+    CLOSED = "closed", _("Closed")
+
+    @classmethod
+    def editable(cls) -> set[str]:
+        """Statuses in which the paper's content may still change."""
+        return {cls.DRAFT}
+
+    @classmethod
+    def sittable(cls) -> set[str]:
+        """Statuses in which a child may start or continue a section."""
+        return {cls.PUBLISHED, cls.OPEN}
+
+
+class SectionResultStatus(models.TextChoices):
+    """Progress through one section, which is one sitting."""
+
+    LOCKED = "locked", _("Locked")
+    UNLOCKED = "unlocked", _("Unlocked")
+    IN_PROGRESS = "in_progress", _("In progress")
+    SUBMITTED = "submitted", _("Submitted")
 
 
 class ResultStatus(models.TextChoices):

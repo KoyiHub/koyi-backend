@@ -241,7 +241,7 @@ class SchoolOverviewService(BaseService):
     def summary(self) -> dict:
         results = self.assessments.get_queryset().aggregate(
             total=Count("id", distinct=True),
-            active=Count("id", filter=Q(status=AssessmentStatus.ACTIVE), distinct=True),
+            active=Count("id", filter=Q(status__in=AssessmentStatus.sittable()), distinct=True),
         )
         graded = self.assessments.get_queryset().aggregate(
             average=Avg("results__score", filter=Q(results__status=ResultStatus.GRADED))
