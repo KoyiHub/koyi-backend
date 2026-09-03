@@ -14,6 +14,7 @@ from apps.common.services import BaseService, NotFoundError, ValidationError
 from apps.school_portal.repositories import (
     AssessmentOversightRepository,
     ReferenceDataRepository,
+    SchoolClassRepository,
     SchoolRepository,
     StudentRepository,
     TeacherRepository,
@@ -100,7 +101,7 @@ class TeacherManagementService(BaseService):
     def __init__(self, school: School) -> None:
         self.school = school
         self.teachers = TeacherRepository(school)
-        self.reference = ReferenceDataRepository()
+        self.classes = SchoolClassRepository(school)
 
     def list(self, *, search: str = "", school_class_id=None):
         queryset = self.teachers.search(search)
@@ -181,7 +182,8 @@ class TeacherManagementService(BaseService):
         return teacher
 
     def _class_is_usable(self, school_class) -> bool:
-        return self.reference.get_class(school_class.pk) is not None
+        # Scoped lookup: a class from another school must not validate here.
+        return self.classes.get_or_none(pk=school_class.pk) is not None
 
 
 class StudentManagementService(BaseService):

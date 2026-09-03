@@ -11,11 +11,14 @@ walk away holding a token at all, even one that every school view would later
 reject.
 """
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+if TYPE_CHECKING:
+    from apps.users.models import User as UserType
 
 User = get_user_model()
 
@@ -29,6 +32,11 @@ class RoleScopedTokenSerializer(TokenObtainPairSerializer):
     #: Deliberately identical for "wrong password", "wrong portal" and "no
     #: profile" so the endpoint cannot be used to enumerate account types.
     invalid_credentials_message: ClassVar[str] = "No active account found with these credentials."
+
+    if TYPE_CHECKING:
+        # `TokenObtainPairSerializer` types this as optional, but it is always
+        # populated by the time `validate` runs — the parent raises otherwise.
+        user: "UserType"
 
     def validate(self, attrs: dict) -> dict:
         data: dict = dict(super().validate(attrs))

@@ -14,6 +14,7 @@ class SchoolTokenObtainPairSerializer(RoleScopedTokenSerializer):
     profile_attribute = "school"
 
     def get_profile_payload(self) -> dict:
+        # `profile_attribute` has already been asserted by the base class.
         school = self.user.school
         return {
             "school": {

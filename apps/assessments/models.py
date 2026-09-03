@@ -10,20 +10,20 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
-from apps.assessments.enums import AssessmentStatus, ResultStatus
+from apps.assessments.enums import AssessmentStatus, ErrorType, GradedBy, ResultStatus
 from apps.common.enums import (
-    MAX_QUESTION_LEVEL,
-    MIN_QUESTION_LEVEL,
+    MAX_FLN_LEVEL,
+    MIN_FLN_LEVEL,
     ContentBlockType,
-    DifficultyLevel,
     OptionType,
+    QuestionLayout,
     QuestionType,
 )
 from apps.common.models import BaseModel
 
 LEVEL_VALIDATORS = [
-    MinValueValidator(MIN_QUESTION_LEVEL),
-    MaxValueValidator(MAX_QUESTION_LEVEL),
+    MinValueValidator(MIN_FLN_LEVEL),
+    MaxValueValidator(MAX_FLN_LEVEL),
 ]
 
 
@@ -53,27 +53,8 @@ class Assessment(BaseModel):
         related_name="assessments",
         verbose_name=_("session"),
     )
-    subject = models.ForeignKey(
-        "curriculum.Subject",
-        on_delete=models.PROTECT,
-        related_name="assessments",
-        verbose_name=_("subject"),
-    )
-    school_class = models.ForeignKey(
-        "schools.SchoolClass",
-        on_delete=models.PROTECT,
-        related_name="assessments",
-        verbose_name=_("class"),
-    )
     name = models.CharField(_("name"), max_length=255)
     instructions = models.TextField(_("instructions"), blank=True)
-    difficulty = models.CharField(
-        _("difficulty"),
-        max_length=16,
-        choices=DifficultyLevel.choices,
-        blank=True,
-        help_text=_("Optional overall rating; individual questions carry their own level."),
-    )
     due_date = models.DateTimeField(_("due date"))
     timer = models.DurationField(
         _("timer"),
@@ -102,7 +83,6 @@ class Assessment(BaseModel):
             # The dashboard lists "my school's active papers, soonest first".
             models.Index(fields=["school", "status", "-due_date"], name="assess_school_status_idx"),
             models.Index(fields=["teacher", "status"], name="assess_teacher_status_idx"),
-            models.Index(fields=["school_class", "-due_date"], name="assess_class_due_idx"),
         ]
 
     def __str__(self) -> str:
@@ -126,15 +106,29 @@ class AssessmentQuestion(BaseModel):
     )
     text = models.TextField(_("text"))
     description = models.TextField(_("description"), blank=True)
-    subject = models.ForeignKey(
-        "curriculum.Subject",
+    source_question = models.ForeignKey(
+        "curriculum.Question",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assessment_copies",
+        verbose_name=_("source question"),
+        help_text=_("Set when pulled from the bank; null when the teacher authored it."),
+    )
+    subskill = models.ForeignKey(
+        "curriculum.Subskill",
         on_delete=models.PROTECT,
         related_name="assessment_questions",
-        verbose_name=_("subject"),
+        verbose_name=_("subskill"),
     )
-    level = models.PositiveSmallIntegerField(
-        _("level"), default=MIN_QUESTION_LEVEL, validators=LEVEL_VALIDATORS
+    skill = models.ForeignKey(
+        "curriculum.Skill",
+        on_delete=models.PROTECT,
+        related_name="assessment_questions",
+        verbose_name=_("skill"),
+        help_text=_("Denormalised from the subskill so the matrix is a single-table read."),
     )
+    fln_level = models.PositiveSmallIntegerField(_("FLN level"), validators=LEVEL_VALIDATORS)
     order = models.PositiveSmallIntegerField(
         _("order"), help_text=_("Position on the paper; assigned automatically when omitted.")
     )
@@ -148,13 +142,8 @@ class AssessmentQuestion(BaseModel):
     question_type = models.CharField(
         _("question type"), max_length=32, choices=QuestionType.choices
     )
-    layout = models.ForeignKey(
-        "curriculum.QuestionLayout",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="assessment_questions",
-        verbose_name=_("layout"),
+    layout = models.CharField(
+        _("layout"), max_length=32, choices=QuestionLayout.choices, blank=True
     )
 
     class Meta:
@@ -166,7 +155,7 @@ class AssessmentQuestion(BaseModel):
                 fields=["assessment", "order"], name="assessment_question_order_unique"
             ),
             models.CheckConstraint(
-                condition=models.Q(level__gte=MIN_QUESTION_LEVEL, level__lte=MAX_QUESTION_LEVEL),
+                condition=models.Q(fln_level__gte=MIN_FLN_LEVEL, fln_level__lte=MAX_FLN_LEVEL),
                 name="assessment_question_level_in_range",
             ),
         ]
@@ -175,13 +164,16 @@ class AssessmentQuestion(BaseModel):
         return f"Q{self.order}: {self.text[:50]}"
 
     def save(self, *args, **kwargs):
+        # Reachable despite the stubs saying otherwise: Django leaves a
+        # non-null field with no default as None on an unsaved instance, which
+        # is exactly the "order omitted" case this branch exists for.
         if self.order is None:
             # Append to the end of the paper. Two concurrent appends can pick
             # the same slot; the unique constraint rejects the loser and the
             # authoring service retries.
-            highest = AssessmentQuestion.objects.filter(assessment_id=self.assessment_id).aggregate(
-                top=models.Max("order")
-            )["top"]
+            highest = AssessmentQuestion.objects.filter(  # type: ignore[unreachable]
+                assessment_id=self.assessment_id
+            ).aggregate(top=models.Max("order"))["top"]
             self.order = (highest or 0) + 1
         return super().save(*args, **kwargs)
 
@@ -340,6 +332,43 @@ class AssessmentQuestionResponse(BaseModel):
         verbose_name=_("media value"),
     )
     text_value = models.TextField(_("text value"), blank=True)
+    transcript = models.TextField(
+        _("transcript"),
+        blank=True,
+        help_text=_("Speech-to-text output, kept beside the audio so a teacher can verify."),
+    )
+
+    # Marking. Null until the response has been marked; free-form items are
+    # marked asynchronously, so a null here is "pending", not "wrong".
+    is_correct = models.BooleanField(_("is correct"), null=True, blank=True)
+    awarded_points = models.DecimalField(
+        _("awarded points"),
+        max_digits=6,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+    )
+    graded_by = models.CharField(
+        _("graded by"), max_length=16, choices=GradedBy.choices, blank=True
+    )
+    grading_confidence = models.DecimalField(
+        _("grading confidence"),
+        max_digits=4,
+        decimal_places=3,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0), MaxValueValidator(1)],
+        help_text=_("Low confidence routes the response to a teacher for review."),
+    )
+    error_type = models.CharField(
+        _("error type"), max_length=32, choices=ErrorType.choices, blank=True
+    )
+    observation_note = models.TextField(
+        _("observation note"),
+        blank=True,
+        help_text=_("How the answer was wrong - the detail remediation is built from."),
+    )
 
     class Meta:
         verbose_name = _("assessment question response")

@@ -37,7 +37,8 @@ def _validate_password_strength(value: str, user=None) -> str:
 
 
 class SessionSerializer(serializers.ModelSerializer):
-    label = serializers.CharField(read_only=True)
+    # See the note on SchoolClassSerializer.label below.
+    label = serializers.CharField(read_only=True)  # type: ignore[assignment]
 
     class Meta:
         model = AcademicSession
@@ -46,7 +47,9 @@ class SessionSerializer(serializers.ModelSerializer):
 
 class SchoolClassSerializer(serializers.ModelSerializer):
     grade_name = serializers.CharField(source="grade.name", read_only=True)
-    label = serializers.CharField(source="__str__", read_only=True)
+    # django-stubs reads a declared field named `label` as an override of
+    # `Field.label`; at runtime DRF collects it as an ordinary field.
+    label = serializers.CharField(source="__str__", read_only=True)  # type: ignore[assignment]
 
     class Meta:
         model = SchoolClass
@@ -54,11 +57,12 @@ class SchoolClassSerializer(serializers.ModelSerializer):
 
 
 class GradeSerializer(serializers.ModelSerializer):
-    classes = SchoolClassSerializer(many=True, read_only=True)
+    """Grades are shared reference data. Classes are not nested here: they
+    belong to a school, and nesting them would serve every tenant's."""
 
     class Meta:
         model = Grade
-        fields = ["id", "name", "classes"]
+        fields = ["id", "name"]
 
 
 class MediaAssetSerializer(serializers.ModelSerializer):
@@ -253,9 +257,7 @@ class StudentWriteSerializer(serializers.ModelSerializer):
 
 
 class AssessmentOversightSerializer(serializers.ModelSerializer):
-    subject_name = serializers.CharField(source="subject.name", read_only=True)
     teacher_name = serializers.CharField(source="teacher.full_name", read_only=True, default=None)
-    school_class = SchoolClassSerializer(read_only=True)
     assigned_count = serializers.IntegerField(read_only=True, default=0)
     graded_count = serializers.IntegerField(read_only=True, default=0)
 
@@ -264,10 +266,7 @@ class AssessmentOversightSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "name",
-            "subject_name",
             "teacher_name",
-            "school_class",
-            "difficulty",
             "status",
             "due_date",
             "assigned_count",

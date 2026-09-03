@@ -13,7 +13,7 @@ from django.db.models.functions import Upper
 from django.utils.translation import gettext_lazy as _
 
 from apps.common.models import BaseModel
-from apps.schools.enums import ClassName, ClassSystem, Gender, GuardianRelationship
+from apps.schools.enums import ClassSystem, Gender, GuardianRelationship
 
 #: Abbreviations become the visible prefix of every student/teacher id, so they
 #: are constrained to something safe to print, type and search on.
@@ -80,23 +80,42 @@ class Grade(BaseModel):
 
 
 class SchoolClass(BaseModel):
-    """A stream within a grade — "Grade 1" arm "2".
+    """A stream within a grade — "Grade 1" arm "A".
+
+    Schools create their own classes against the shared `Grade` list, so this
+    is tenant-scoped: two schools naming a class the same thing is normal, and
+    uniqueness only has to hold within one school.
 
     Named `SchoolClass` because `class` is a Python keyword, which would make
     the foreign keys pointing here unnameable.
     """
 
-    grade = models.ForeignKey(
-        Grade, on_delete=models.CASCADE, related_name="classes", verbose_name=_("grade")
+    school = models.ForeignKey(
+        "schools.School",
+        on_delete=models.CASCADE,
+        related_name="classes",
+        verbose_name=_("school"),
     )
-    name = models.CharField(_("name"), max_length=1, choices=ClassName.choices)
+    grade = models.ForeignKey(
+        Grade, on_delete=models.PROTECT, related_name="classes", verbose_name=_("grade")
+    )
+    name = models.CharField(
+        _("name"),
+        max_length=16,
+        help_text=_('The arm or stream, e.g. "A" or "2".'),
+    )
 
     class Meta:
         verbose_name = _("class")
         verbose_name_plural = _("classes")
         ordering = ["grade__name", "name"]
         constraints = [
-            models.UniqueConstraint(fields=["grade", "name"], name="class_grade_name_unique"),
+            models.UniqueConstraint(
+                "school", "grade", Upper("name"), name="class_school_grade_name_unique"
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["school", "grade"], name="class_school_grade_idx"),
         ]
 
     def __str__(self) -> str:
@@ -236,8 +255,16 @@ class Student(BaseModel):
     school_class = models.ForeignKey(
         SchoolClass,
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="students",
         verbose_name=_("class"),
+        help_text=_("Only a disabled student may be left without a class."),
+    )
+    is_active = models.BooleanField(
+        _("active"),
+        default=True,
+        help_text=_("Students hold no login, so disabling one is a flag here."),
     )
     student_id = models.CharField(
         _("student id"),
@@ -260,10 +287,17 @@ class Student(BaseModel):
             # Globally unique because it is what a student types to sign in to
             # an assessment — no school context is available at that point.
             models.UniqueConstraint(Upper("student_id"), name="student_id_ci_unique"),
+            # An active student always belongs to a class; only a disabled one
+            # may sit outside the structure, e.g. between sessions.
+            models.CheckConstraint(
+                condition=models.Q(school_class__isnull=False) | models.Q(is_active=False),
+                name="student_active_requires_class",
+            ),
         ]
         indexes = [
             models.Index(fields=["school", "school_class"], name="student_school_class_idx"),
             models.Index(fields=["school", "last_name"], name="student_school_name_idx"),
+            models.Index(fields=["school", "is_active"], name="student_school_active_idx"),
         ]
 
     def __str__(self) -> str:
@@ -274,28 +308,10 @@ class Student(BaseModel):
         return f"{self.first_name} {self.last_name}".strip()
 
 
-class Parent(BaseModel):
-    """A guardian who may follow more than one child, possibly across classes."""
-
-    name = models.CharField(_("name"), max_length=255, db_index=True)
-    students = models.ManyToManyField(
-        Student, related_name="parents", blank=True, verbose_name=_("students")
-    )
-
-    class Meta:
-        verbose_name = _("parent")
-        verbose_name_plural = _("parents")
-        ordering = ["name"]
-
-    def __str__(self) -> str:
-        return self.name
-
-
 __all__ = [
     "ABBREVIATION_VALIDATOR",
     "AcademicSession",
     "Grade",
-    "Parent",
     "School",
     "SchoolClass",
     "Student",

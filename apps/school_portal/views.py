@@ -13,11 +13,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from apps.assessments.models import Assessment
+from apps.common.permissions import acting_school
 from apps.school_portal.authentication import SchoolTokenObtainPairSerializer
 from apps.school_portal.permissions import IsSchoolAdmin, IsVerifiedSchoolAdmin, SchoolScopedMixin
 from apps.school_portal.repositories import (
     AssessmentOversightRepository,
     ReferenceDataRepository,
+    SchoolClassRepository,
 )
 from apps.school_portal.serializers import (
     AssessmentOversightSerializer,
@@ -40,6 +43,7 @@ from apps.school_portal.services import (
     StudentManagementService,
     TeacherManagementService,
 )
+from apps.schools.models import SchoolClass, Student, Teacher
 
 SCHOOL_AUTH_TAG = ["school: auth"]
 SCHOOL_TAG = ["school"]
@@ -71,7 +75,9 @@ class SchoolLoginView(TokenObtainPairView):
     """Exchange school credentials for a token pair. Teachers are refused here."""
 
     serializer_class = SchoolTokenObtainPairSerializer
-    permission_classes = [AllowAny]
+    # `TokenViewBase` types this as an empty tuple; overriding it is the
+    # documented way to open the endpoint.
+    permission_classes = (AllowAny,)  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -87,12 +93,12 @@ class SchoolProfileView(generics.RetrieveUpdateAPIView):
     permission_classes = [IsSchoolAdmin]
 
     def get_object(self):
-        return self.request.user.school
+        return acting_school(self.request)
 
     def perform_update(self, serializer) -> None:
         # The service, not the serializer, owns the write — reattach the saved
         # row so the response renders what actually landed in the database.
-        service = SchoolProfileService(self.request.user.school)
+        service = SchoolProfileService(acting_school(self.request))
         serializer.instance = service.update(**serializer.validated_data)
 
 
@@ -113,12 +119,17 @@ class GradeListView(generics.ListAPIView):
 
 @extend_schema(tags=SCHOOL_TAG)
 class SchoolClassListView(generics.ListAPIView):
+    """The acting school's own classes."""
+
     serializer_class = SchoolClassSerializer
+    # Declared so schema generation can read the model without executing
+    # `get_queryset`, which needs an authenticated school.
+    queryset = SchoolClass.objects.none()
     permission_classes = [IsSchoolAdmin]
     pagination_class = None
 
     def get_queryset(self):
-        return ReferenceDataRepository().classes()
+        return SchoolClassRepository(acting_school(self.request)).all()
 
 
 @extend_schema(tags=SCHOOL_TAG)
@@ -139,6 +150,7 @@ class SessionListView(generics.ListAPIView):
 @extend_schema(tags=SCHOOL_TAG)
 class TeacherListCreateView(generics.ListCreateAPIView):
     serializer_class = TeacherSerializer
+    queryset = Teacher.objects.none()
     permission_classes = [IsSchoolAdmin]
 
     def get_permissions(self):
@@ -149,7 +161,7 @@ class TeacherListCreateView(generics.ListCreateAPIView):
 
     @property
     def service(self) -> TeacherManagementService:
-        return TeacherManagementService(self.request.user.school)
+        return TeacherManagementService(acting_school(self.request))
 
     def get_queryset(self):
         return self.service.list(
@@ -172,7 +184,7 @@ class TeacherDetailView(APIView):
 
     @property
     def service(self) -> TeacherManagementService:
-        return TeacherManagementService(self.request.user.school)
+        return TeacherManagementService(acting_school(self.request))
 
     @extend_schema(responses={200: TeacherSerializer})
     def get(self, request: Request, pk) -> Response:  # noqa: ARG002
@@ -201,11 +213,12 @@ class TeacherDetailView(APIView):
 @extend_schema(tags=SCHOOL_TAG)
 class StudentListCreateView(generics.ListCreateAPIView):
     serializer_class = StudentSerializer
+    queryset = Student.objects.none()
     permission_classes = [IsSchoolAdmin]
 
     @property
     def service(self) -> StudentManagementService:
-        return StudentManagementService(self.request.user.school)
+        return StudentManagementService(acting_school(self.request))
 
     def get_queryset(self):
         return self.service.list(
@@ -228,7 +241,7 @@ class StudentDetailView(APIView):
 
     @property
     def service(self) -> StudentManagementService:
-        return StudentManagementService(self.request.user.school)
+        return StudentManagementService(acting_school(self.request))
 
     @extend_schema(responses={200: StudentSerializer})
     def get(self, request: Request, pk) -> Response:  # noqa: ARG002
@@ -257,6 +270,7 @@ class AssessmentOversightListView(SchoolScopedMixin, generics.ListAPIView):
     """Every assessment in the school, whoever set it."""
 
     serializer_class = AssessmentOversightSerializer
+    queryset = Assessment.objects.none()
 
     def get_queryset(self):
         # Already tenant-scoped by the repository; the mixin's `school`
@@ -270,5 +284,5 @@ class SchoolOverviewView(APIView):
     serializer_class = SchoolOverviewSerializer
 
     def get(self, request: Request) -> Response:
-        summary = SchoolOverviewService(request.user.school).summary()
+        summary = SchoolOverviewService(acting_school(request)).summary()
         return Response(SchoolOverviewSerializer(summary).data)
