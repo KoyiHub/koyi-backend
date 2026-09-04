@@ -8,6 +8,7 @@ teacher's own school is what scopes every query.
 from typing import TYPE_CHECKING, Any
 
 from django.db.models import Prefetch, Q
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
@@ -52,6 +53,17 @@ from apps.assessments.services import (
 from apps.common.permissions import IsTeacher, acting_teacher
 from apps.common.services import NotFoundError
 from apps.curriculum.models import Question, Skill
+from apps.instruction.grouping import GroupingService
+from apps.instruction.models import Group, GroupCriterion, LessonPlan
+from apps.instruction.serializers import (
+    AddMemberSerializer,
+    GroupSerializer,
+    GroupWriteSerializer,
+    LessonPlanSerializer,
+    MembershipSerializer,
+    PlanFeedbackSerializer,
+)
+from apps.instruction.tasks import generate_group_plan_task
 from apps.schools.models import Student
 from apps.teacher_portal.authentication import TeacherLoginSerializer
 from apps.teacher_portal.serializers import (
@@ -588,3 +600,201 @@ class ResponseReviewView(TeacherViewMixin, APIView):
                 }
             ).data
         )
+
+
+# ---------------------------------------------------------------------------
+# Groups and lesson plans
+# ---------------------------------------------------------------------------
+
+
+class GroupViewMixin(TeacherViewMixin):
+    """Groups belong to the teacher who owns them, not to the school at large."""
+
+    def groups(self):
+        return (
+            Group.objects.filter(teacher=self.teacher)
+            .prefetch_related("criteria", "memberships__student")
+            .order_by("-created_at")
+        )
+
+    def get_group(self, pk) -> Group:
+        group = self.groups().filter(pk=pk).first()
+        if group is None:
+            raise NotFoundError("No such group.")
+        return group
+
+    @property
+    def grouping(self) -> GroupingService:
+        return GroupingService(self.school, self.teacher)
+
+
+@extend_schema(tags=TEACHER_TAG)
+class GroupListCreateView(GroupViewMixin, APIView):
+    serializer_class = GroupSerializer
+
+    @extend_schema(responses={200: GroupSerializer(many=True)})
+    def get(self, request: Request) -> Response:
+        groups = self.groups()
+        if request.query_params.get("status"):
+            groups = groups.filter(status=request.query_params["status"])
+        return Response(GroupSerializer(groups, many=True).data)
+
+    @extend_schema(request=GroupWriteSerializer, responses={201: GroupSerializer})
+    def post(self, request: Request) -> Response:
+        serializer = GroupWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = dict(serializer.validated_data)
+        criteria = data.pop("criteria", [])
+
+        group = Group.objects.create(school=self.school, teacher=self.teacher, **data)
+        for rule in criteria:
+            GroupCriterion.objects.create(
+                group=group,
+                type=rule["type"],
+                comparator=rule.get("comparator", ""),
+                level=rule.get("level"),
+                skill_id=rule.get("skill"),
+                subskill_id=rule.get("subskill"),
+                school_class_id=rule.get("school_class"),
+            )
+        # Fill it immediately, so a teacher sees who matched rather than an
+        # empty group they cannot tell apart from a broken rule.
+        self.grouping.reconcile(group)
+        return Response(
+            GroupSerializer(self.get_group(group.pk)).data, status=status.HTTP_201_CREATED
+        )
+
+
+@extend_schema(tags=TEACHER_TAG)
+class GroupDetailView(GroupViewMixin, APIView):
+    serializer_class = GroupSerializer
+
+    @extend_schema(responses={200: GroupSerializer})
+    def get(self, request: Request, pk) -> Response:  # noqa: ARG002
+        return Response(GroupSerializer(self.get_group(pk)).data)
+
+    @extend_schema(responses={204: None})
+    def delete(self, request: Request, pk) -> Response:  # noqa: ARG002
+        # Archived, not deleted: the membership history is how "why was this
+        # child taught this" stays answerable after the fact.
+        self.grouping.archive(self.get_group(pk))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema(tags=TEACHER_TAG)
+class GroupMemberView(GroupViewMixin, APIView):
+    serializer_class = MembershipSerializer
+
+    @extend_schema(responses={200: MembershipSerializer(many=True)})
+    def get(self, request: Request, pk) -> Response:
+        """Membership history. `?current=true` for the live roll only."""
+        group = self.get_group(pk)
+        memberships = group.memberships.select_related("student")
+        if request.query_params.get("current", "").lower() == "true":
+            memberships = memberships.filter(left_at__isnull=True)
+        return Response(MembershipSerializer(memberships, many=True).data)
+
+    @extend_schema(request=AddMemberSerializer, responses={201: MembershipSerializer})
+    def post(self, request: Request, pk) -> Response:
+        serializer = AddMemberSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        group = self.get_group(pk)
+        student = Student.objects.filter(
+            pk=serializer.validated_data["student"], school=self.school
+        ).first()
+        if student is None:
+            raise NotFoundError("No such student in this school.")
+        membership = self.grouping.add_member(group, student)
+        return Response(MembershipSerializer(membership).data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(tags=TEACHER_TAG, responses={204: None})
+class GroupMemberDetailView(GroupViewMixin, APIView):
+    serializer_class = MembershipSerializer
+
+    def delete(self, request: Request, pk, student_id) -> Response:  # noqa: ARG002
+        group = self.get_group(pk)
+        student = Student.objects.filter(pk=student_id, school=self.school).first()
+        if student is None:
+            raise NotFoundError("No such student in this school.")
+        self.grouping.remove_member(group, student)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema(tags=TEACHER_TAG, responses={201: GroupSerializer(many=True)})
+class GroupFormView(GroupViewMixin, APIView):
+    """Form groups for weaknesses enough of this teacher's children share."""
+
+    serializer_class = GroupSerializer
+
+    def post(self, request: Request) -> Response:
+        created = self.grouping.form_groups(
+            teacher=self.teacher, domain=request.query_params.get("domain", "")
+        )
+        return Response(GroupSerializer(created, many=True).data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(tags=TEACHER_TAG)
+class GroupPlanView(GroupViewMixin, APIView):
+    """The group's lesson plan."""
+
+    serializer_class = LessonPlanSerializer
+
+    @extend_schema(responses={200: LessonPlanSerializer})
+    def get(self, request: Request, pk) -> Response:  # noqa: ARG002
+        group = self.get_group(pk)
+        plan = group.lesson_plans.order_by("-created_at").first()
+        if plan is None:
+            raise NotFoundError("No plan yet for this group.")
+
+        # Opening it is the only usage signal there is, since plans are advice
+        # and there is no edit to learn from.
+        if plan.opened_at is None:
+            plan.opened_at = timezone.now()
+            plan.save(update_fields=["opened_at", "updated_at"])
+        return Response(LessonPlanSerializer(plan).data)
+
+    @extend_schema(request=None, responses={202: LessonPlanSerializer})
+    def post(self, request: Request, pk) -> Response:  # noqa: ARG002
+        """Generate, or regenerate. Runs in the background - poll the GET."""
+        group = self.get_group(pk)
+        generate_group_plan_task.delay(str(group.pk))
+        return Response({"status": "generating"}, status=status.HTTP_202_ACCEPTED)
+
+
+@extend_schema(tags=TEACHER_TAG, responses={200: LessonPlanSerializer})
+class PlanFeedbackView(TeacherViewMixin, APIView):
+    """Thumbs up or down. The whole feedback surface."""
+
+    serializer_class = PlanFeedbackSerializer
+
+    def post(self, request: Request, pk) -> Response:
+        serializer = PlanFeedbackSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        plan = LessonPlan.objects.filter(
+            Q(group__teacher=self.teacher) | Q(student__school=self.school), pk=pk
+        ).first()
+        if plan is None:
+            raise NotFoundError("No such lesson plan.")
+
+        plan.was_helpful = serializer.validated_data["was_helpful"]
+        plan.save(update_fields=["was_helpful", "updated_at"])
+        return Response(LessonPlanSerializer(plan).data)
+
+
+@extend_schema(tags=TEACHER_TAG, responses={200: LessonPlanSerializer})
+class StudentPlanView(TeacherViewMixin, APIView):
+    """A child's personalisation note, if one was warranted."""
+
+    serializer_class = LessonPlanSerializer
+
+    def get(self, request: Request, pk) -> Response:  # noqa: ARG002
+        student = Student.objects.filter(pk=pk, school=self.school).first()
+        if student is None:
+            raise NotFoundError("No such student in this school.")
+
+        plan = student.lesson_plans.order_by("-created_at").first()
+        if plan is None:
+            raise NotFoundError("No personal note for this child - the group plan covers them.")
+        return Response(LessonPlanSerializer(plan).data)

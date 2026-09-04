@@ -45,6 +45,7 @@ def diagnose_student_task(self, assessment_id: str, student_id: str) -> dict:  #
 
     placements = DiagnosisService().run(assessment, student)
     _queue_free_form_marking(assessment_id, student_id)
+    _queue_regrouping(assessment)
     logger.info(
         "student diagnosed",
         extra={
@@ -95,3 +96,16 @@ def _queue_free_form_marking(assessment_id: str, student_id: str) -> None:
     ).exists()
     if pending:
         mark_free_form_responses_task.delay(str(assessment_id), str(student_id))
+
+
+def _queue_regrouping(assessment) -> None:
+    """Reconcile the school's groups once a child's placement has moved.
+
+    Queued per placement but cheap: reconciliation is a set difference against
+    the criteria, and a group whose membership already matches produces no
+    writes. Doing it per school rather than per group keeps one child's result
+    from fanning out into a task per group they might belong to.
+    """
+    from apps.instruction.tasks import reconcile_groups_task
+
+    reconcile_groups_task.delay(str(assessment.school_id))

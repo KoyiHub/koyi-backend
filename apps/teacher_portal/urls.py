@@ -71,6 +71,27 @@ urlpatterns = [
         views.ResponseReviewView.as_view(),
         name="response-review",
     ),
+    # Groups and plans
+    path("groups/", views.GroupListCreateView.as_view(), name="group-list"),
+    path("groups/form/", views.GroupFormView.as_view(), name="group-form"),
+    path("groups/<uuid:pk>/", views.GroupDetailView.as_view(), name="group-detail"),
+    path("groups/<uuid:pk>/members/", views.GroupMemberView.as_view(), name="group-members"),
+    path(
+        "groups/<uuid:pk>/members/<uuid:student_id>/",
+        views.GroupMemberDetailView.as_view(),
+        name="group-member-detail",
+    ),
+    path("groups/<uuid:pk>/lesson-plan/", views.GroupPlanView.as_view(), name="group-plan"),
+    path(
+        "lesson-plans/<uuid:pk>/feedback/",
+        views.PlanFeedbackView.as_view(),
+        name="plan-feedback",
+    ),
+    path(
+        "students/<uuid:pk>/lesson-plan/",
+        views.StudentPlanView.as_view(),
+        name="student-plan",
+    ),
     path(
         "students/<uuid:pk>/skills/",
         views.StudentBreakdownView.as_view(),

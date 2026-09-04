@@ -69,6 +69,7 @@ LOCAL_APPS = [
     "apps.assessments",
     "apps.activities",
     "apps.ai",
+    "apps.instruction",
     # Product surfaces — API only: routes, auth, permissions, services.
     "apps.school_portal",
     "apps.teacher_portal",
@@ -294,6 +295,15 @@ SPECTACULAR_SETTINGS = {
     "SWAGGER_UI_DIST": "SIDECAR",
     "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
     "REDOC_DIST": "SIDECAR",
+    # Without these, a choice set reached through two differently-named fields
+    # is emitted twice under hashed names - "Type5e1Enum", "TypeC35Enum" - and
+    # a generated client ends up with two unrelated-looking types for one enum.
+    "ENUM_NAME_OVERRIDES": {
+        "AssessmentStatus": "apps.assessments.enums.AssessmentStatus.choices",
+        "QuestionType": "apps.common.enums.QuestionType.choices",
+        "CriterionType": "apps.instruction.enums.CriterionType.choices",
+        "MembershipReason": "apps.instruction.enums.MembershipReason.choices",
+    },
 }
 
 # ---------------------------------------------------------------------------

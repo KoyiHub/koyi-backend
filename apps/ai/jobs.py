@@ -20,13 +20,16 @@ from apps.ai.client import LLMError, get_client
 from apps.ai.enums import GenerationStatus, JobType
 from apps.ai.models import AIGeneration
 from apps.ai.schemas import (
+    LESSON_PLAN_SCHEMA,
     MARKING_SCHEMA,
     NARRATIVE_SCHEMA,
     TAGGING_SCHEMA,
+    LessonPlanContent,
     MarkingVerdict,
     Narrative,
     SchemaError,
     TagSuggestion,
+    parse_lesson_plan,
     parse_marking,
     parse_narrative,
     parse_tags,
@@ -320,6 +323,132 @@ def _student_payload(b) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Lesson plans
+# ---------------------------------------------------------------------------
+
+#: What each resource tier permits, lower-cased for comparison. A plan naming
+#: anything outside its tier is rejected rather than handed to a teacher who
+#: will discover the gap mid-lesson.
+TIER_MATERIALS = {
+    "minimal": {"chalkboard", "chalk", "voice", "none", "hands", "stones", "sticks"},
+    "basic": {
+        "chalkboard",
+        "chalk",
+        "voice",
+        "none",
+        "hands",
+        "stones",
+        "sticks",
+        "paper",
+        "pencils",
+        "printed cards",
+        "worksheets",
+        "exercise books",
+        "chart paper",
+    },
+    "equipped": None,  # anything goes
+}
+
+
+def author_canonical_plan(
+    *, domain: str, from_level: int, to_level: int, subskill, resource_tier: str
+) -> JobOutcome[LessonPlanContent]:
+    """Write the reusable plan for one pedagogical situation.
+
+    Generated once per signature rather than per group. The expensive reasoning
+    happens here, which is what makes the per-group pass cheap and what gives
+    the product something to serve when generation fails.
+    """
+    payload = "\n".join(
+        [
+            f"Domain: {domain}",
+            f"Children are working at level {from_level}, moving towards level {to_level}.",
+            f"Focus subskill: {subskill.name} ({subskill.skill.name})",
+            f"Resource tier: {resource_tier}",
+        ]
+    )
+    return _run(
+        job=JobType.LESSON_PLAN_CANONICAL,
+        payload=payload,
+        schema=LESSON_PLAN_SCHEMA,
+        parse=lambda data: parse_lesson_plan(data, allowed_materials=TIER_MATERIALS[resource_tier]),
+        subject_type="canonical_plan",
+        subject_id=subskill.code,
+    )
+
+
+def adapt_plan_for_group(*, canonical, group, weak_subskills: list[str], size: int):
+    """Fit a canonical plan to one group. Short input, short output."""
+    weaknesses = [f"- {name}" for name in weak_subskills] or ["- (none recorded)"]
+    payload = "\n".join(
+        [
+            "Canonical plan:",
+            _plan_as_text(canonical.content),
+            "",
+            f"Group: {group.name}",
+            f"Children in the group: {size}",
+            f"Resource tier: {group.resource_tier}",
+            "Subskills these children did not pass:",
+            *weaknesses,
+        ]
+    )
+    return _run(
+        job=JobType.LESSON_PLAN_GROUP,
+        payload=payload,
+        schema=LESSON_PLAN_SCHEMA,
+        parse=lambda data: parse_lesson_plan(
+            data, allowed_materials=TIER_MATERIALS[group.resource_tier]
+        ),
+        subject_type="group",
+        subject_id=group.pk,
+    )
+
+
+def personalise_for_student(
+    *, plan_content: dict, student, weak_subskills: list[str], levels: dict
+):
+    """A short note beside the group plan, for a child who sits away from it."""
+    weaknesses = [f"- {name}" for name in weak_subskills] or ["- (none recorded)"]
+    payload = "\n".join(
+        [
+            "Group plan:",
+            _plan_as_text(plan_content),
+            "",
+            f"Child: {student.full_name}",
+            f"Literacy level: {levels.get('literacy', 'not assessed')}",
+            f"Numeracy level: {levels.get('numeracy', 'not assessed')}",
+            "Subskills they did not pass:",
+            *weaknesses,
+        ]
+    )
+    return _run(
+        job=JobType.LESSON_PLAN_STUDENT,
+        payload=payload,
+        schema=NARRATIVE_SCHEMA,
+        parse=parse_narrative,
+        subject_type="student",
+        subject_id=student.pk,
+    )
+
+
+def _plan_as_text(content: dict) -> str:
+    lines = [
+        f"Objective: {content.get('objective', '')}",
+        f"Duration: {content.get('duration_minutes', '')} minutes",
+        "Materials: " + (", ".join(content.get("materials") or []) or "none"),
+        "Steps:",
+    ]
+    for index, step in enumerate(content.get("steps") or [], start=1):
+        lines.append(
+            f"  {index}. ({step.get('minutes')} min) Teacher: {step.get('teacher_does')} "
+            f"| Children: {step.get('children_do')}"
+        )
+    if content.get("checks"):
+        lines.append("Checks: " + "; ".join(content["checks"]))
+    return "\n".join(lines)
+
+
 def apply_marking(response, verdict: MarkingVerdict, *, transcript: str = "") -> None:
     """Write a verdict onto a response.
 
@@ -352,11 +481,14 @@ __all__ = [
     "MarkingVerdict",
     "Narrative",
     "TagSuggestion",
+    "adapt_plan_for_group",
     "apply_marking",
+    "author_canonical_plan",
     "explain_assessment",
     "explain_student",
     "mark_spoken_response",
     "mark_written_response",
+    "personalise_for_student",
     "suggest_question_tags",
     "transcribe_response",
 ]

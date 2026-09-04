@@ -908,33 +908,104 @@ regression to explain away.
 asynchronously, so a teacher opening analytics early sees numbers that are still
 settling — they need to know that.
 
-### 5.6 Students and groups — Planned
+### 5.6 Groups and lesson plans
 
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/v1/teacher/students/` | Students in the teacher's classes |
-| `GET` | `/v1/teacher/students/{id}/` | Profile: levels, weak subskills, groups |
-| `GET` | `/v1/teacher/students/{id}/skills/` | Per-skill breakdown + movement |
-| `GET` | `/v1/teacher/students/{id}/lesson-plan/` | Personalisation delta |
-| `GET` | `/v1/teacher/groups/` | Groups the teacher owns |
-| `POST` | `/v1/teacher/groups/` | Create one manually |
-| `GET` | `/v1/teacher/groups/{id}/` | Members and criteria |
-| `POST` | `/v1/teacher/groups/{id}/members/` | Add a child |
-| `DELETE` | `/v1/teacher/groups/{id}/members/{studentId}/` | Remove one |
-| `GET` | `/v1/teacher/groups/{id}/lesson-plan/` | The group's plan |
-| `POST` | `/v1/teacher/lesson-plans/{id}/feedback/` | `{ was_helpful: true }` |
+| Method | Path | Purpose | Status |
+|---|---|---|---|
+| `GET` | `/v1/teacher/groups/` | Groups the teacher owns. `?status=` | **Built** |
+| `POST` | `/v1/teacher/groups/` | Create one with criteria | **Built** |
+| `POST` | `/v1/teacher/groups/form/` | Form groups for shared weaknesses | **Built** |
+| `GET` | `/v1/teacher/groups/{id}/` | Criteria and current members | **Built** |
+| `DELETE` | `/v1/teacher/groups/{id}/` | Archive it | **Built** |
+| `GET` | `/v1/teacher/groups/{id}/members/` | Membership history. `?current=true` | **Built** |
+| `POST` | `/v1/teacher/groups/{id}/members/` | Add a child by hand | **Built** |
+| `DELETE` | `/v1/teacher/groups/{id}/members/{studentId}/` | Remove one | **Built** |
+| `GET` | `/v1/teacher/groups/{id}/lesson-plan/` | The group's plan | **Built** |
+| `POST` | `/v1/teacher/groups/{id}/lesson-plan/` | Generate or regenerate | **Built** |
+| `GET` | `/v1/teacher/students/{id}/lesson-plan/` | A child's personal note | **Built** |
+| `POST` | `/v1/teacher/lesson-plans/{id}/feedback/` | `{ was_helpful }` | **Built** |
+| `GET` | `/v1/teacher/students/` | Students in the teacher's classes | Planned |
 
-Groups have **rule-based dynamic membership**: criteria on level, skill,
-subskill and class, all optional and ANDed. Children join when they match and
-leave when they progress past it. Groups form at **4 children** and hold for
-**14 days** (or one assessment cycle) before restructuring, so a lesson plan
-survives long enough to be taught.
+#### How membership works
 
-A child may be in several groups; one per domain is `is_primary` and drives the
-plan the teacher actually runs. Surface that one and treat the rest as advisory.
+Criteria on **level, skill, subskill and class** — all optional, all ANDed. A
+group with no criteria matches **nobody**, deliberately: matching everybody
+would be the more dangerous reading of the same silence.
 
-**Lesson plans are advice, not documents.** There is no edit workflow. The only
-feedback is a thumbs up/down plus whether it was opened.
+**Two clocks, deliberately out of step**, and the UI should reflect both:
+
+- **Membership is live.** A child who progresses past the criteria leaves the
+  moment placement says so. Show current membership as current.
+- **The group is slow.** It holds for a **stability window** (14 days) before
+  restructuring may touch it, so a plan survives long enough to be delivered.
+  `stable_until` says when that ends.
+
+A group that falls below **4 children** is *flagged*, not dissolved — dissolving
+mid-window strands whoever is left. Surface it as "this group has got small"
+rather than removing it.
+
+A child a teacher adds **by hand is never removed by the rules**. Their
+judgement outranks a criterion they did not write, and `join_reason` tells the
+two apart (`matched` vs `added`).
+
+Membership is **history, not a toggle**: a child who leaves and rejoins has two
+rows. `left_at: null` means current.
+
+#### Creating a group
+
+```json
+{
+  "name": "Level 2 literacy",
+  "domain": "literacy",
+  "resource_tier": "basic",
+  "criteria": [
+    { "type": "level", "level": 2, "comparator": "eq" },
+    { "type": "subskill", "subskill": "<uuid>" }
+  ]
+}
+```
+
+Criterion types: `level` (needs `level`, and `comparator` of `eq`/`gte`/`lte`),
+`skill`, `subskill`, `class`. A rule naming nothing is a `400` — it would
+otherwise match everyone.
+
+**The group is filled on creation**, so the response already carries `size` and
+`members`. A teacher should see who matched, not an empty group they cannot
+tell apart from a broken rule.
+
+`resource_tier` is `minimal` (chalkboard and voice), `basic` (paper, printed
+materials) or `equipped` (manipulatives, some devices). It is part of the plan's
+identity, not a label: a plan naming materials the room does not have is worse
+than no plan, because the teacher finds out mid-lesson.
+
+#### Lesson plans
+
+`POST` to generate — it returns **`202` and runs in the background**, because
+generation takes tens of seconds. Poll the `GET`.
+
+`status` is the field to build around:
+
+| `status` | Meaning |
+|---|---|
+| `ready` | Adapted to this group |
+| `fallback` | The canonical plan, because adaptation failed. **Still teachable** — present it normally, not as an error |
+| `failed` | Nothing could be generated. `content` is empty; say so plainly |
+| `generating` | In flight |
+
+`content` carries `objective`, `duration_minutes`, `materials`, `steps` (each
+with `teacher_does`, `children_do`, `minutes`), `checks`, `common_errors`,
+`success_criteria` and `note`.
+
+`member_snapshot` is who was in the group when the plan was written, so what a
+teacher is holding stays coherent as children move.
+
+**Plans are advice, not documents.** There is no edit workflow and no approval
+queue. The only feedback is `was_helpful` plus `opened_at`, which the `GET`
+sets on first read.
+
+A **student lesson plan** is a short note beside the group plan, generated only
+for a child whose weaknesses diverge from the group's. A `404` means the group
+plan already covers them — that is the normal case, not a gap.
 
 ---
 
@@ -1256,6 +1327,7 @@ designs:
 | Date | Change |
 |---|---|
 | 2026-09-04 | First version. Covers phases 0–2 as built, phases 3–7 as designed. |
+| 2026-09-04 | Groups and lesson plans are built. Membership is live while the group holds for a stability window; a thin group is flagged rather than dissolved; a failed adaptation serves the canonical plan rather than an error. |
 | 2026-09-04 | The response review endpoint is built. Pagination now carries `page`, `num_pages` and `page_size` for numbered controls — §2 previously documented the bare DRF default, which was wrong. The `question_type` closed set is documented. |
 | 2026-09-04 | Analytics, the roster and the student skill breakdown are built, each with an optional AI narrative that degrades to null. |
 | 2026-09-04 | The AI layer is built: provider-swappable marking of written and spoken answers, and subskill/level suggestion for authored questions. Marking now runs in two passes, so a level can change once free-form answers land. |

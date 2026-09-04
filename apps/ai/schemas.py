@@ -171,6 +171,110 @@ def parse_narrative(payload: dict) -> Narrative:
     )
 
 
+# ---------------------------------------------------------------------------
+# Lesson plans
+# ---------------------------------------------------------------------------
+
+LESSON_PLAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "objective": {"type": "string", "maxLength": 300},
+        "duration_minutes": {"type": "integer", "minimum": 5, "maximum": 120},
+        "materials": {"type": "array", "items": {"type": "string", "maxLength": 120}},
+        "steps": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "teacher_does": {"type": "string", "maxLength": 500},
+                    "children_do": {"type": "string", "maxLength": 500},
+                    "minutes": {"type": "integer", "minimum": 1, "maximum": 60},
+                },
+                "required": ["teacher_does", "children_do", "minutes"],
+                "additionalProperties": False,
+            },
+        },
+        "checks": {"type": "array", "items": {"type": "string", "maxLength": 300}},
+        "common_errors": {"type": "array", "items": {"type": "string", "maxLength": 300}},
+        "success_criteria": {"type": "array", "items": {"type": "string", "maxLength": 300}},
+        "note": {"type": "string", "maxLength": 500},
+    },
+    "required": ["objective", "duration_minutes", "materials", "steps", "checks"],
+    "additionalProperties": False,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class LessonPlanContent:
+    objective: str
+    duration_minutes: int
+    materials: tuple[str, ...]
+    steps: tuple[dict, ...]
+    checks: tuple[str, ...]
+    common_errors: tuple[str, ...] = ()
+    success_criteria: tuple[str, ...] = ()
+    note: str = ""
+
+    def as_dict(self) -> dict:
+        return {
+            "objective": self.objective,
+            "duration_minutes": self.duration_minutes,
+            "materials": list(self.materials),
+            "steps": [dict(step) for step in self.steps],
+            "checks": list(self.checks),
+            "common_errors": list(self.common_errors),
+            "success_criteria": list(self.success_criteria),
+            "note": self.note,
+        }
+
+
+def parse_lesson_plan(payload: dict, *, allowed_materials: set | None = None) -> LessonPlanContent:
+    """Validate the plan against what the classroom actually has.
+
+    The schema can say materials is a list of strings. Only this can say the
+    room has no printer. A plan naming materials a teacher does not have is
+    worse than no plan, because they find out mid-lesson.
+    """
+    objective = str(payload.get("objective") or "").strip()
+    if not objective:
+        raise SchemaError("objective is empty")
+
+    steps = payload.get("steps") or []
+    if len(steps) < 2:
+        raise SchemaError("a plan needs at least two steps")
+
+    materials = [str(m).strip() for m in (payload.get("materials") or []) if str(m).strip()]
+    if allowed_materials is not None:
+        unavailable = [m for m in materials if m.lower() not in allowed_materials]
+        if unavailable:
+            raise SchemaError(
+                "plan needs materials this classroom does not have: " + ", ".join(unavailable)
+            )
+
+    return LessonPlanContent(
+        objective=objective[:300],
+        duration_minutes=int(payload.get("duration_minutes") or 30),
+        materials=tuple(materials),
+        steps=tuple(
+            {
+                "teacher_does": str(step.get("teacher_does") or "").strip(),
+                "children_do": str(step.get("children_do") or "").strip(),
+                "minutes": int(step.get("minutes") or 5),
+            }
+            for step in steps
+        ),
+        checks=tuple(str(c).strip() for c in (payload.get("checks") or []) if str(c).strip()),
+        common_errors=tuple(
+            str(c).strip() for c in (payload.get("common_errors") or []) if str(c).strip()
+        ),
+        success_criteria=tuple(
+            str(c).strip() for c in (payload.get("success_criteria") or []) if str(c).strip()
+        ),
+        note=str(payload.get("note") or "").strip()[:500],
+    )
+
+
 def _confidence(value) -> float:
     """Clamped rather than rejected.
 
@@ -185,13 +289,16 @@ def _confidence(value) -> float:
 
 __all__ = [
     "DEFAULT_CONFIDENCE_FLOOR",
+    "LESSON_PLAN_SCHEMA",
     "MARKING_SCHEMA",
     "NARRATIVE_SCHEMA",
     "TAGGING_SCHEMA",
+    "LessonPlanContent",
     "MarkingVerdict",
     "Narrative",
     "SchemaError",
     "TagSuggestion",
+    "parse_lesson_plan",
     "parse_marking",
     "parse_narrative",
     "parse_tags",
