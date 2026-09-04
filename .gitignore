@@ -30,6 +30,7 @@ db.sqlite3*
 celerybeat-schedule*
 *.log
 
+
 # --- Test & coverage ---------------------------------------------------------
 .pytest_cache/
 .coverage

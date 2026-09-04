@@ -250,6 +250,14 @@ class SchoolPasswordChangeView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+@extend_schema(tags=SCHOOL_AUTH_TAG)
+class TeacherLoginView(TokenObtainPairView):
+    """Exchange a teacher id, school id, and password for a token pair."""
+
+    serializer_class = TeacherTokenObtainPairSerializer
+    permission_classes = [AllowAny]
+
+
 # ---------------------------------------------------------------------------
 # Profile
 # ---------------------------------------------------------------------------

@@ -2,6 +2,8 @@
 
 from django.urls import include, path
 
+from apps.school_portal import views
+
 urlpatterns = [
     path("auth/", include("apps.users.urls")),
     path("school/", include("apps.school_portal.urls")),
