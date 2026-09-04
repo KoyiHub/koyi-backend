@@ -42,3 +42,46 @@ class BaseService:
         # student) at construction, so every query below is already scoped.
         for key, value in context.items():
             setattr(self, key, value)
+
+
+class ActivityService:
+    """Writes the audit log.
+
+    One entry point, called from the services that perform core actions. The
+    label and description are rendered to a person as written, so they are
+    composed here rather than reconstructed at read time — the wording has to
+    survive the referenced rows being renamed or removed.
+    """
+
+    def record(
+        self,
+        *,
+        school,
+        action: str,
+        label: str,
+        description: str = "",
+        actor_user=None,
+        teacher=None,
+        student=None,
+        school_class=None,
+        assessment=None,
+        metadata: dict | None = None,
+        occurred_at=None,
+    ):
+        from django.utils import timezone
+
+        from apps.activities.models import Activity
+
+        return Activity.objects.create(
+            school=school,
+            action=action,
+            label=label,
+            description=description,
+            actor_user=actor_user,
+            teacher=teacher,
+            student=student,
+            school_class=school_class,
+            assessment=assessment,
+            metadata=metadata or {},
+            occurred_at=occurred_at or timezone.now(),
+        )

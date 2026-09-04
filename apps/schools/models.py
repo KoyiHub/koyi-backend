@@ -12,8 +12,9 @@ from django.db import models
 from django.db.models.functions import Upper
 from django.utils.translation import gettext_lazy as _
 
-from apps.common.models import BaseModel
-from apps.schools.enums import ClassName, ClassSystem, Gender, GuardianRelationship
+from apps.common.enums import SkillStateStatus
+from apps.common.models import BaseModel, SoftDeleteModel
+from apps.schools.enums import ClassSystem, Gender, GuardianRelationship
 
 #: Abbreviations become the visible prefix of every student/teacher id, so they
 #: are constrained to something safe to print, type and search on.
@@ -80,23 +81,42 @@ class Grade(BaseModel):
 
 
 class SchoolClass(BaseModel):
-    """A stream within a grade — "Grade 1" arm "2".
+    """A stream within a grade — "Grade 1" arm "A".
+
+    Schools create their own classes against the shared `Grade` list, so this
+    is tenant-scoped: two schools naming a class the same thing is normal, and
+    uniqueness only has to hold within one school.
 
     Named `SchoolClass` because `class` is a Python keyword, which would make
     the foreign keys pointing here unnameable.
     """
 
-    grade = models.ForeignKey(
-        Grade, on_delete=models.CASCADE, related_name="classes", verbose_name=_("grade")
+    school = models.ForeignKey(
+        "schools.School",
+        on_delete=models.CASCADE,
+        related_name="classes",
+        verbose_name=_("school"),
     )
-    name = models.CharField(_("name"), max_length=1, choices=ClassName.choices)
+    grade = models.ForeignKey(
+        Grade, on_delete=models.PROTECT, related_name="classes", verbose_name=_("grade")
+    )
+    name = models.CharField(
+        _("name"),
+        max_length=16,
+        help_text=_('The arm or stream, e.g. "A" or "2".'),
+    )
 
     class Meta:
         verbose_name = _("class")
         verbose_name_plural = _("classes")
         ordering = ["grade__name", "name"]
         constraints = [
-            models.UniqueConstraint(fields=["grade", "name"], name="class_grade_name_unique"),
+            models.UniqueConstraint(
+                "school", "grade", Upper("name"), name="class_school_grade_name_unique"
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["school", "grade"], name="class_school_grade_idx"),
         ]
 
     def __str__(self) -> str:
@@ -171,8 +191,16 @@ class School(BaseModel):
         return self.user.email_verified
 
 
-class Teacher(BaseModel):
-    """A member of teaching staff. Logs in; owns assessments."""
+class Teacher(SoftDeleteModel, BaseModel):
+    """A member of teaching staff. Logs in; owns assessments.
+
+    Soft-deleted rather than removed. Removing a teacher outright would take
+    their groups with them and blank the author of every assessment they wrote,
+    the moment an administrator clicked a button they might have misread. The
+    row is hidden immediately and destroyed by the purge once the retention
+    window has passed - long enough that a mistake is recoverable, short enough
+    that "we deleted them" stays true.
+    """
 
     user = models.OneToOneField(
         "users.User",
@@ -218,12 +246,17 @@ class Teacher(BaseModel):
         return f"{self.first_name} {self.last_name}".strip()
 
 
-class Student(BaseModel):
+class Student(SoftDeleteModel, BaseModel):
     """A learner.
 
     Has no `User`: students never sign in with a password. They are admitted to
     an assessment by `apps.student_portal`, which mints a short-lived,
     student-scoped token.
+
+    Soft-deleted, like `Teacher`, and for a sharper reason: a child's results
+    cascade off this row. Hard-deleting on request would destroy a term of
+    diagnosis on a misclick, with nothing to restore from. The purge does that
+    later, deliberately, once the retention window has passed.
     """
 
     school = models.ForeignKey(
@@ -236,8 +269,16 @@ class Student(BaseModel):
     school_class = models.ForeignKey(
         SchoolClass,
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="students",
         verbose_name=_("class"),
+        help_text=_("Only a disabled student may be left without a class."),
+    )
+    is_active = models.BooleanField(
+        _("active"),
+        default=True,
+        help_text=_("Students hold no login, so disabling one is a flag here."),
     )
     student_id = models.CharField(
         _("student id"),
@@ -246,7 +287,18 @@ class Student(BaseModel):
     )
     guardian_name = models.CharField(_("guardian name"), max_length=255)
     guardian_phone_number = models.CharField(
-        _("guardian phone number"), max_length=20, validators=[PHONE_VALIDATOR]
+        _("guardian phone number"),
+        max_length=20,
+        validators=[PHONE_VALIDATOR],
+        help_text=_("For the school's records. Nothing is ever sent to it."),
+    )
+    guardian_email = models.EmailField(
+        _("guardian email"),
+        blank=True,
+        help_text=_(
+            "The only channel an assessment link is sent on. Optional, because "
+            "many guardians will not have one - those children get a printed code."
+        ),
     )
     guardian_relationship = models.CharField(
         _("guardian relationship"), max_length=32, choices=GuardianRelationship.choices
@@ -260,10 +312,17 @@ class Student(BaseModel):
             # Globally unique because it is what a student types to sign in to
             # an assessment — no school context is available at that point.
             models.UniqueConstraint(Upper("student_id"), name="student_id_ci_unique"),
+            # An active student always belongs to a class; only a disabled one
+            # may sit outside the structure, e.g. between sessions.
+            models.CheckConstraint(
+                condition=models.Q(school_class__isnull=False) | models.Q(is_active=False),
+                name="student_active_requires_class",
+            ),
         ]
         indexes = [
             models.Index(fields=["school", "school_class"], name="student_school_class_idx"),
             models.Index(fields=["school", "last_name"], name="student_school_name_idx"),
+            models.Index(fields=["school", "is_active"], name="student_school_active_idx"),
         ]
 
     def __str__(self) -> str:
@@ -274,30 +333,102 @@ class Student(BaseModel):
         return f"{self.first_name} {self.last_name}".strip()
 
 
-class Parent(BaseModel):
-    """A guardian who may follow more than one child, possibly across classes."""
-
-    name = models.CharField(_("name"), max_length=255, db_index=True)
-    students = models.ManyToManyField(
-        Student, related_name="parents", blank=True, verbose_name=_("students")
-    )
-
-    class Meta:
-        verbose_name = _("parent")
-        verbose_name_plural = _("parents")
-        ordering = ["name"]
-
-    def __str__(self) -> str:
-        return self.name
-
-
 __all__ = [
     "ABBREVIATION_VALIDATOR",
     "AcademicSession",
     "Grade",
-    "Parent",
     "School",
     "SchoolClass",
     "Student",
+    "StudentProfile",
+    "StudentSkillState",
     "Teacher",
 ]
+
+
+class StudentProfile(BaseModel):
+    """What a child currently needs taught.
+
+    A derived cache: everything here is rebuildable from the `SkillLevelResult`
+    rows behind it. The ledger is the truth; this exists so a class list can be
+    rendered without recomputing thirty diagnoses. That also means a bug in the
+    placement rules is recoverable by replay rather than data surgery.
+
+    The two levels move independently. A child can be Level 4 in numeracy and
+    Level 2 in literacy, and there is deliberately no combined figure - an
+    average across two unrelated abilities would describe neither.
+
+    There is no foreign key to the `Placement` that produced each level. It
+    would point from `schools` into `assessments`, which already points back
+    here, and the cycle costs a second migration in both apps to buy one
+    indexed lookup. Ask `Placement` for the latest row instead.
+    """
+
+    student = models.OneToOneField(
+        Student, on_delete=models.CASCADE, related_name="profile", verbose_name=_("student")
+    )
+    literacy_level = models.PositiveSmallIntegerField(_("literacy level"), null=True, blank=True)
+    numeracy_level = models.PositiveSmallIntegerField(_("numeracy level"), null=True, blank=True)
+    last_assessed_at = models.DateTimeField(_("last assessed at"), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("student profile")
+        verbose_name_plural = _("student profiles")
+        indexes = [
+            models.Index(fields=["literacy_level"], name="profile_literacy_idx"),
+            models.Index(fields=["numeracy_level"], name="profile_numeracy_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.student_id}: lit {self.literacy_level}, num {self.numeracy_level}"
+
+
+class StudentSkillState(BaseModel):
+    """Where a child stands on one subskill, across every assessment so far.
+
+    The unit a lesson plan targets and a group forms around. Like
+    `StudentProfile` this is derived, and `evidence_count` is what makes a
+    claim of mastery answerable - it says how many times the child has actually
+    shown it, not just that they did once.
+    """
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name="skill_states",
+        verbose_name=_("student"),
+    )
+    subskill = models.ForeignKey(
+        "curriculum.Subskill",
+        on_delete=models.CASCADE,
+        related_name="student_states",
+        verbose_name=_("subskill"),
+    )
+    status = models.CharField(
+        _("status"),
+        max_length=16,
+        choices=SkillStateStatus.choices,
+        default=SkillStateStatus.NOT_ASSESSED,
+    )
+    highest_level_passed = models.PositiveSmallIntegerField(
+        _("highest level passed"), null=True, blank=True
+    )
+    evidence_count = models.PositiveSmallIntegerField(_("evidence count"), default=0)
+    last_observed_at = models.DateTimeField(_("last observed at"), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("student skill state")
+        verbose_name_plural = _("student skill states")
+        ordering = ["student", "subskill__skill__display_order", "subskill__display_order"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "subskill"], name="student_skill_state_unique"
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["student", "status"], name="skill_state_student_idx"),
+            models.Index(fields=["subskill", "status"], name="skill_state_subskill_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.student_id} {self.subskill_id}: {self.status}"

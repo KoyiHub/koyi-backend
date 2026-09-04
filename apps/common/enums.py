@@ -21,6 +21,17 @@ class UserRole(models.TextChoices):
     TEACHER = "teacher", _("Teacher")
 
 
+class Domain(models.TextChoices):
+    """The two halves of foundational learning.
+
+    A closed set by design: placement branches on it constantly, and a third
+    value appearing would silently invalidate every level computation.
+    """
+
+    LITERACY = "literacy", _("Literacy")
+    NUMERACY = "numeracy", _("Numeracy")
+
+
 class MediaType(models.TextChoices):
     IMAGE = "image", _("Image")
     AUDIO = "audio", _("Audio")
@@ -52,6 +63,31 @@ class QuestionType(models.TextChoices):
         return {cls.SINGLE_CHOICE, cls.MULTIPLE_CHOICE, cls.TRUE_FALSE}
 
 
+class QuestionLayout(models.TextChoices):
+    """How the client renders a question.
+
+    A closed set rather than a table: a layout the client has no rendering
+    code for is useless, so a new layout ships with a client release either
+    way. Being an enum buys validation the table could not give.
+    """
+
+    MEDIA_GRID_CHOICE = "media_grid_choice", _("Media grid")
+    MEDIA_LIST_CHOICE = "media_list_choice", _("Media list")
+    COMPARISON_PANEL_CHOICE = "comparison_panel_choice", _("Comparison panel")
+    SPEECH_RESPONSE_PROMPT = "speech_response_prompt", _("Speech response")
+    PASSAGE_COMPREHENSION_CHOICE = "passage_comprehension_choice", _("Passage comprehension")
+
+    @classmethod
+    def option_layouts(cls) -> set[str]:
+        """Layouts that render answer options; the rest expect none."""
+        return {
+            cls.MEDIA_GRID_CHOICE,
+            cls.MEDIA_LIST_CHOICE,
+            cls.COMPARISON_PANEL_CHOICE,
+            cls.PASSAGE_COMPREHENSION_CHOICE,
+        }
+
+
 class AnswerType(models.TextChoices):
     """Shape of the expected answer for questions that are not option-based."""
 
@@ -67,13 +103,44 @@ class OptionType(models.TextChoices):
     TRUE_FALSE = "true_false", _("True / false")
 
 
-class DifficultyLevel(models.TextChoices):
-    EASY = "easy", _("Easy")
-    MEDIUM = "medium", _("Medium")
-    HARD = "hard", _("Hard")
+class SkillStateStatus(models.TextChoices):
+    """Where a child currently stands on one subskill.
+
+    Lives here rather than in `assessments` because `schools` reads it too, and
+    a foreign key between those two apps in both directions costs an extra
+    migration in each.
+    """
+
+    NOT_ASSESSED = "not_assessed", _("Not assessed")
+    WEAK = "weak", _("Weak")
+    DEVELOPING = "developing", _("Developing")
+    MASTERED = "mastered", _("Mastered")
 
 
-# Questions carry a numeric difficulty ("level") alongside the assessment-wide
-# `difficulty`; bound it so analytics can safely bucket on it.
-MIN_QUESTION_LEVEL = 1
-MAX_QUESTION_LEVEL = 5
+class ActivityAction(models.TextChoices):
+    """Core actions recorded in the audit log."""
+
+    ASSESSMENT_CREATED = "assessment_created", _("Assessment created")
+    ASSESSMENT_PUBLISHED = "assessment_published", _("Assessment published")
+    ASSESSMENT_ASSIGNED = "assessment_assigned", _("Assessment assigned")
+    SECTION_STARTED = "section_started", _("Section started")
+    SECTION_SUBMITTED = "section_submitted", _("Section submitted")
+    ASSESSMENT_SUBMITTED = "assessment_submitted", _("Assessment submitted")
+    ASSESSMENT_MARKED = "assessment_marked", _("Assessment marked")
+    STUDENT_PLACED = "student_placed", _("Student placed")
+    GROUP_CREATED = "group_created", _("Group created")
+    GROUP_MEMBER_ADDED = "group_member_added", _("Group member added")
+    GROUP_MEMBER_REMOVED = "group_member_removed", _("Group member removed")
+    LESSON_PLAN_GENERATED = "lesson_plan_generated", _("Lesson plan generated")
+    STUDENT_CREATED = "student_created", _("Student created")
+    STUDENT_TRANSFERRED = "student_transferred", _("Student transferred")
+    STUDENT_DISABLED = "student_disabled", _("Student disabled")
+    TEACHER_CREATED = "teacher_created", _("Teacher created")
+    TEACHER_DISABLED = "teacher_disabled", _("Teacher disabled")
+
+
+#: FLN developmental levels. Not a difficulty rating — these are the five
+#: ability bands the whole product is organised around.
+MIN_FLN_LEVEL = 1
+MAX_FLN_LEVEL = 5
+FLN_LEVELS = range(MIN_FLN_LEVEL, MAX_FLN_LEVEL + 1)

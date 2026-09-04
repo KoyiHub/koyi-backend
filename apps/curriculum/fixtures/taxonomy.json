@@ -1,0 +1,543 @@
+{
+  "skills": [
+    {
+      "code": "phonological_awareness",
+      "name": "Phonological Awareness",
+      "domain": "literacy",
+      "min_level": 1,
+      "max_level": 2,
+      "is_core": true,
+      "display_order": 1,
+      "subskills": [
+        {
+          "code": "lit_rhyming_and_onset_sounds",
+          "name": "Rhyming and onset sounds",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_initial_phoneme_recognition",
+          "name": "Initial phoneme recognition",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_phoneme_segmentation",
+          "name": "Phoneme segmentation",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_phoneme_blending",
+          "name": "Phoneme blending",
+          "display_order": 4,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    },
+    {
+      "code": "alphabetic_knowledge_phonics",
+      "name": "Alphabetic Knowledge & Phonics",
+      "domain": "literacy",
+      "min_level": 1,
+      "max_level": 3,
+      "is_core": true,
+      "display_order": 2,
+      "subskills": [
+        {
+          "code": "lit_letter_naming_and_recognition",
+          "name": "Letter naming and recognition",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_letter_sound_correspondence",
+          "name": "Letter-sound correspondence",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_vowel_and_consonant_identification",
+          "name": "Vowel and consonant identification",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_cvc_word_decoding",
+          "name": "CVC word decoding",
+          "display_order": 4,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_consonant_blends_and_digraphs",
+          "name": "Consonant blends and digraphs",
+          "display_order": 5,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    },
+    {
+      "code": "word_reading_sight_words",
+      "name": "Word Reading & Sight Words",
+      "domain": "literacy",
+      "min_level": 2,
+      "max_level": 3,
+      "is_core": true,
+      "display_order": 3,
+      "subskills": [
+        {
+          "code": "lit_high_frequency_word_reading",
+          "name": "High-frequency word reading",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_simple_word_decoding",
+          "name": "Simple word decoding",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_automatic_word_recognition",
+          "name": "Automatic word recognition",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_irregular_sight_word_vocabulary",
+          "name": "Irregular/sight-word vocabulary",
+          "display_order": 4,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    },
+    {
+      "code": "reading_fluency",
+      "name": "Reading Fluency",
+      "domain": "literacy",
+      "min_level": 3,
+      "max_level": 4,
+      "is_core": true,
+      "display_order": 4,
+      "subskills": [
+        {
+          "code": "lit_phrase_and_sentence_accuracy",
+          "name": "Phrase and sentence accuracy",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_passage_reading_rate",
+          "name": "Passage reading rate",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_intonation_and_phrasing",
+          "name": "Intonation and phrasing",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    },
+    {
+      "code": "vocabulary_oral_language",
+      "name": "Vocabulary & Oral Language",
+      "domain": "literacy",
+      "min_level": 2,
+      "max_level": 4,
+      "is_core": true,
+      "display_order": 5,
+      "subskills": [
+        {
+          "code": "lit_word_understanding_and_use",
+          "name": "Word understanding and use",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_picture_object_naming",
+          "name": "Picture/object naming",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_word_meanings_synonyms_and_antonyms",
+          "name": "Word meanings, synonyms and antonyms",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_oral_narrative_and_retelling",
+          "name": "Oral narrative and retelling",
+          "display_order": 4,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    },
+    {
+      "code": "reading_comprehension",
+      "name": "Reading Comprehension",
+      "domain": "literacy",
+      "min_level": 3,
+      "max_level": 5,
+      "is_core": true,
+      "display_order": 6,
+      "subskills": [
+        {
+          "code": "lit_recall_of_explicit_details",
+          "name": "Recall of explicit details",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_simple_inference",
+          "name": "Simple inference",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_sequencing_events",
+          "name": "Sequencing events",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_vocabulary_in_context",
+          "name": "Vocabulary in context",
+          "display_order": 4,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    },
+    {
+      "code": "writing_spelling",
+      "name": "Writing & Spelling",
+      "domain": "literacy",
+      "min_level": 2,
+      "max_level": 5,
+      "is_core": true,
+      "display_order": 7,
+      "subskills": [
+        {
+          "code": "lit_letter_and_word_formation",
+          "name": "Letter and word formation",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_cvc_and_high_frequency_word_spelling",
+          "name": "CVC and high-frequency word spelling",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_dictated_phrases_and_sentences",
+          "name": "Dictated phrases and sentences",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "lit_spacing_capitalization_and_punctuation",
+          "name": "Spacing, capitalization and punctuation",
+          "display_order": 4,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    },
+    {
+      "code": "counting_number_identification",
+      "name": "Counting & Number Identification",
+      "domain": "numeracy",
+      "min_level": 1,
+      "max_level": 2,
+      "is_core": true,
+      "display_order": 1,
+      "subskills": [
+        {
+          "code": "num_numeral_recognition",
+          "name": "Numeral recognition",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_one_to_one_counting",
+          "name": "One-to-one counting",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_forward_and_backward_counting",
+          "name": "Forward and backward counting",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_cardinality",
+          "name": "Cardinality",
+          "display_order": 4,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    },
+    {
+      "code": "quantity_comparison_ordering",
+      "name": "Quantity Comparison & Ordering",
+      "domain": "numeracy",
+      "min_level": 1,
+      "max_level": 2,
+      "is_core": true,
+      "display_order": 2,
+      "subskills": [
+        {
+          "code": "num_compare_quantities",
+          "name": "Compare quantities",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_compare_numerals",
+          "name": "Compare numerals",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_order_numbers",
+          "name": "Order numbers",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_relative_magnitude",
+          "name": "Relative magnitude",
+          "display_order": 4,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    },
+    {
+      "code": "number_patterns_sequencing",
+      "name": "Number Patterns & Sequencing",
+      "domain": "numeracy",
+      "min_level": 1,
+      "max_level": 3,
+      "is_core": true,
+      "display_order": 3,
+      "subskills": [
+        {
+          "code": "num_missing_number_sequences",
+          "name": "Missing-number sequences",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_skip_counting",
+          "name": "Skip-counting",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_arithmetic_patterns",
+          "name": "Arithmetic patterns",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_even_odd_recognition",
+          "name": "Even/odd recognition",
+          "display_order": 4,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    },
+    {
+      "code": "addition_subtraction",
+      "name": "Addition & Subtraction",
+      "domain": "numeracy",
+      "min_level": 2,
+      "max_level": 4,
+      "is_core": true,
+      "display_order": 4,
+      "subskills": [
+        {
+          "code": "num_single_digit_addition",
+          "name": "Single-digit addition",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_single_digit_subtraction",
+          "name": "Single-digit subtraction",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_addition_with_carrying",
+          "name": "Addition with carrying",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_subtraction_across_10",
+          "name": "Subtraction across 10",
+          "display_order": 4,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_number_decomposition",
+          "name": "Number decomposition",
+          "display_order": 5,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    },
+    {
+      "code": "place_value_number_concepts",
+      "name": "Place Value & Number Concepts",
+      "domain": "numeracy",
+      "min_level": 2,
+      "max_level": 3,
+      "is_core": true,
+      "display_order": 5,
+      "subskills": [
+        {
+          "code": "num_tens_and_ones",
+          "name": "Tens and ones",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_number_decomposition_by_place_value",
+          "name": "Number decomposition by place value",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_two_digit_number_comparison",
+          "name": "Two-digit number comparison",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    },
+    {
+      "code": "multiplication",
+      "name": "Multiplication",
+      "domain": "numeracy",
+      "min_level": 4,
+      "max_level": 5,
+      "is_core": true,
+      "display_order": 6,
+      "subskills": [
+        {
+          "code": "num_basic_multiplication_facts",
+          "name": "Basic multiplication facts",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_multiplication_as_repeated_addition",
+          "name": "Multiplication as repeated addition",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_multiplication_and_division_relationships",
+          "name": "Multiplication and division relationships",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    },
+    {
+      "code": "word_problems_reasoning",
+      "name": "Word Problems & Mathematical Reasoning",
+      "domain": "numeracy",
+      "min_level": 3,
+      "max_level": 5,
+      "is_core": true,
+      "display_order": 7,
+      "subskills": [
+        {
+          "code": "num_addition_subtraction_word_problems",
+          "name": "Addition/subtraction word problems",
+          "display_order": 1,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_multiplication_word_problems",
+          "name": "Multiplication word problems",
+          "display_order": 2,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_translating_contexts_into_operations",
+          "name": "Translating contexts into operations",
+          "display_order": 3,
+          "min_level": null,
+          "max_level": null
+        },
+        {
+          "code": "num_explaining_mathematical_reasoning",
+          "name": "Explaining mathematical reasoning",
+          "display_order": 4,
+          "min_level": null,
+          "max_level": null
+        }
+      ]
+    }
+  ]
+}

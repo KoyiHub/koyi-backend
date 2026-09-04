@@ -8,13 +8,41 @@ mixing in one of the `*ScopedMixin` classes below and never filtering by a
 client-supplied school/teacher/student id.
 """
 
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.db.models import QuerySet
 from rest_framework.permissions import BasePermission
 from rest_framework.request import Request
 
 from apps.common.enums import UserRole
+
+if TYPE_CHECKING:
+    from apps.schools.models import School, Teacher
+    from apps.users.models import User
+
+
+def acting_school(request: Request) -> "School":
+    """The school behind the request.
+
+    `IsSchoolAdmin` has already established both the role and the profile, so
+    this is a narrowing helper rather than a check. Views call it instead of
+    reaching through `request.user` so that assertion lives in one place.
+    """
+    return request.user.school  # type: ignore[union-attr]
+
+
+def acting_teacher(request: Request) -> "Teacher":
+    """The teacher behind the request, guaranteed by `IsTeacher`."""
+    return request.user.teacher  # type: ignore[union-attr]
+
+
+def acting_user(request: Request) -> "User":
+    """The signed-in account, for recording who did something.
+
+    Same narrowing as `acting_school`: a permission class has already refused
+    the anonymous case, so this states that once instead of at every call.
+    """
+    return request.user  # type: ignore[return-value]
 
 
 class RoleRequired(BasePermission):
@@ -54,21 +82,6 @@ class IsTeacher(RoleRequired):
         return super().has_permission(request, view) and hasattr(request.user, "teacher")
 
 
-class IsStudent(BasePermission):
-    """The student assessment runner.
-
-    Students authenticate through `StudentJWTAuthentication`, which installs a
-    `StudentPrincipal` rather than a `User`; checking for that attribute is
-    what distinguishes them from a staff token replayed at a student URL.
-    """
-
-    message = "A student assessment session is required."
-
-    def has_permission(self, request: Request, view: Any) -> bool:  # noqa: ARG002
-        principal = getattr(request, "user", None)
-        return bool(principal is not None and getattr(principal, "is_student", False))
-
-
 class IsVerifiedSchoolAdmin(IsSchoolAdmin):
     """Actions that create real-world artefacts (teachers, assessments) and so
     should wait until the school has proven it owns its email address."""
@@ -76,7 +89,9 @@ class IsVerifiedSchoolAdmin(IsSchoolAdmin):
     message = "Verify your school email address before using this feature."
 
     def has_permission(self, request: Request, view: Any) -> bool:
-        return super().has_permission(request, view) and request.user.email_verified
+        if not super().has_permission(request, view):
+            return False
+        return bool(getattr(request.user, "email_verified", False))
 
 
 # ---------------------------------------------------------------------------
@@ -84,18 +99,35 @@ class IsVerifiedSchoolAdmin(IsSchoolAdmin):
 # ---------------------------------------------------------------------------
 
 
-class SchoolScopedMixin:
+class ScopedMixinBase:
+    """What every `*ScopedMixin` needs from the view it is mixed into.
+
+    Declared for type checkers only: at runtime these come from the DRF
+    generic view the mixin is combined with, which mypy cannot see through a
+    bare mixin declaration.
+    """
+
+    if TYPE_CHECKING:
+        # Typed loosely on purpose: these are supplied by the DRF generic view
+        # the mixin is combined with, and narrowing them here would clash with
+        # Django's own `View.request` declaration further up the MRO.
+        request: Any
+
+        def get_queryset(self) -> QuerySet: ...
+
+
+class SchoolScopedMixin(ScopedMixinBase):
     """Locks a view to the acting school and exposes it as `self.school`."""
 
-    permission_classes = [IsSchoolAdmin]
+    permission_classes: Any = [IsSchoolAdmin]
 
     #: ORM path from this view's model to `schools.School`, e.g. "school" or
     #: "assessment__school". `None` means the model *is* the school.
     school_lookup: ClassVar[str | None] = "school"
 
     @property
-    def school(self):
-        return self.request.user.school
+    def school(self) -> "School":
+        return acting_school(self.request)
 
     def filter_to_tenant(self, queryset: QuerySet) -> QuerySet:
         if self.school_lookup is None:
@@ -106,11 +138,11 @@ class SchoolScopedMixin:
         return self.filter_to_tenant(super().get_queryset())
 
 
-class TeacherScopedMixin:
+class TeacherScopedMixin(ScopedMixinBase):
     """Locks a view to the acting teacher's school, and optionally to rows the
     teacher personally owns."""
 
-    permission_classes = [IsTeacher]
+    permission_classes: Any = [IsTeacher]
 
     school_lookup: ClassVar[str | None] = "school"
     #: Set to an ORM path (e.g. "teacher") to narrow further than the school —
@@ -118,11 +150,11 @@ class TeacherScopedMixin:
     teacher_lookup: ClassVar[str | None] = None
 
     @property
-    def teacher(self):
-        return self.request.user.teacher
+    def teacher(self) -> "Teacher":
+        return acting_teacher(self.request)
 
     @property
-    def school(self):
+    def school(self) -> "School":
         return self.teacher.school
 
     def filter_to_tenant(self, queryset: QuerySet) -> QuerySet:
@@ -131,27 +163,6 @@ class TeacherScopedMixin:
         if self.teacher_lookup is not None:
             queryset = queryset.filter(**{self.teacher_lookup: self.teacher})
         return queryset
-
-    def get_queryset(self) -> QuerySet:
-        return self.filter_to_tenant(super().get_queryset())
-
-
-class StudentScopedMixin:
-    """Locks a view to the acting student."""
-
-    permission_classes = [IsStudent]
-
-    #: ORM path from this view's model to `schools.Student`.
-    student_lookup: ClassVar[str | None] = "student"
-
-    @property
-    def student(self):
-        return self.request.user.student
-
-    def filter_to_tenant(self, queryset: QuerySet) -> QuerySet:
-        if self.student_lookup is None:
-            return queryset.filter(pk=self.student.pk)
-        return queryset.filter(**{self.student_lookup: self.student})
 
     def get_queryset(self) -> QuerySet:
         return self.filter_to_tenant(super().get_queryset())

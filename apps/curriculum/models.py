@@ -1,10 +1,13 @@
-"""The reusable question library.
+"""The skill taxonomy and the reusable question library.
 
-This is the *template* side of the product: subjects, topics, banks and the
-questions inside them. Nothing here is bound to a student or a sitting — when
-a teacher builds an assessment, the relevant rows are copied into
-`apps.assessments` so that editing a bank question later cannot retroactively
-change a paper somebody has already sat.
+Two things live here. The *taxonomy* — domains, skills and subskills — is the
+spine of the whole product: every question is tagged to a subskill at an FLN
+level, and that pairing is what turns a set of responses into a diagnosis.
+The *bank* is the company-authored question library teachers draw from.
+
+Nothing here is bound to a student or a sitting. When a teacher builds an
+assessment the relevant rows are copied into `apps.assessments`, so editing a
+bank question later cannot retroactively change a paper somebody has sat.
 """
 
 from django.core.validators import MaxValueValidator, MinValueValidator
@@ -13,101 +16,144 @@ from django.db.models.functions import Upper
 from django.utils.translation import gettext_lazy as _
 
 from apps.common.enums import (
-    MAX_QUESTION_LEVEL,
-    MIN_QUESTION_LEVEL,
+    MAX_FLN_LEVEL,
+    MIN_FLN_LEVEL,
     AnswerType,
     ContentBlockType,
+    Domain,
     OptionType,
+    QuestionLayout,
     QuestionType,
 )
 from apps.common.models import BaseModel
 
 LEVEL_VALIDATORS = [
-    MinValueValidator(MIN_QUESTION_LEVEL),
-    MaxValueValidator(MAX_QUESTION_LEVEL),
+    MinValueValidator(MIN_FLN_LEVEL),
+    MaxValueValidator(MAX_FLN_LEVEL),
 ]
 
 
-class Subject(BaseModel):
+class Skill(BaseModel):
+    """A strand of ability within one domain — "Reading Fluency".
+
+    Skills are what *place* a child: a level is passed when enough of the
+    skills applicable at that level pass. `min_level`/`max_level` bound where
+    the skill is assessed at all, which is why "enough" has to be measured
+    against the skills applicable at a level rather than against all of them.
+    """
+
+    code = models.SlugField(_("code"), max_length=64, unique=True)
     name = models.CharField(_("name"), max_length=128)
+    domain = models.CharField(_("domain"), max_length=16, choices=Domain.choices)
+    min_level = models.PositiveSmallIntegerField(_("minimum level"), validators=LEVEL_VALIDATORS)
+    max_level = models.PositiveSmallIntegerField(_("maximum level"), validators=LEVEL_VALIDATORS)
+    is_core = models.BooleanField(
+        _("is core"),
+        default=True,
+        help_text=_("Only core skills gate placement; the rest are enrichment."),
+    )
+    display_order = models.PositiveSmallIntegerField(_("display order"), default=0)
 
     class Meta:
-        verbose_name = _("subject")
-        verbose_name_plural = _("subjects")
-        ordering = ["name"]
+        verbose_name = _("skill")
+        verbose_name_plural = _("skills")
+        ordering = ["domain", "display_order", "name"]
+        indexes = [
+            models.Index(fields=["domain", "is_core"], name="skill_domain_core_idx"),
+        ]
         constraints = [
-            models.UniqueConstraint(Upper("name"), name="subject_name_ci_unique"),
+            models.CheckConstraint(
+                condition=models.Q(min_level__lte=models.F("max_level")),
+                name="skill_level_range_ordered",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(min_level__gte=MIN_FLN_LEVEL, max_level__lte=MAX_FLN_LEVEL),
+                name="skill_level_range_in_bounds",
+            ),
         ]
 
     def __str__(self) -> str:
         return self.name
 
+    def covers_level(self, level: int) -> bool:
+        return self.min_level <= level <= self.max_level
 
-class Topic(BaseModel):
+
+class Subskill(BaseModel):
+    """The specific ability a question tests and a lesson plan remediates.
+
+    `min_level`/`max_level` are optional: unset means the subskill is assessed
+    across its parent skill's whole range. Setting them narrows it — under
+    Alphabetic Knowledge (1-3), letter naming is really level 1 alone — and
+    that narrowing is data, not a migration.
+    """
+
+    skill = models.ForeignKey(
+        Skill, on_delete=models.CASCADE, related_name="subskills", verbose_name=_("skill")
+    )
+    code = models.SlugField(_("code"), max_length=64, unique=True)
     name = models.CharField(_("name"), max_length=255)
+    min_level = models.PositiveSmallIntegerField(
+        _("minimum level"), null=True, blank=True, validators=LEVEL_VALIDATORS
+    )
+    max_level = models.PositiveSmallIntegerField(
+        _("maximum level"), null=True, blank=True, validators=LEVEL_VALIDATORS
+    )
+    display_order = models.PositiveSmallIntegerField(_("display order"), default=0)
 
     class Meta:
-        verbose_name = _("topic")
-        verbose_name_plural = _("topics")
-        ordering = ["name"]
+        verbose_name = _("subskill")
+        verbose_name_plural = _("subskills")
+        ordering = ["skill", "display_order", "name"]
+        indexes = [
+            models.Index(fields=["skill", "display_order"], name="subskill_skill_order_idx"),
+        ]
         constraints = [
-            models.UniqueConstraint(Upper("name"), name="topic_name_ci_unique"),
+            models.CheckConstraint(
+                condition=models.Q(min_level__isnull=True)
+                | models.Q(max_level__isnull=True)
+                | models.Q(min_level__lte=models.F("max_level")),
+                name="subskill_level_range_ordered",
+            ),
         ]
 
     def __str__(self) -> str:
         return self.name
 
+    @property
+    def domain(self) -> str:
+        return self.skill.domain
 
-class QuestionLayout(BaseModel):
-    """A named rendering template ("two-column", "image-left"), applied by the
-    client. Stored as a row rather than a choices field so new layouts ship
-    without a migration."""
+    @property
+    def level_range(self) -> tuple[int, int]:
+        """The narrowest applicable range: own bounds, else the parent skill's."""
+        return (
+            self.min_level if self.min_level is not None else self.skill.min_level,
+            self.max_level if self.max_level is not None else self.skill.max_level,
+        )
 
-    name = models.CharField(_("name"), max_length=128)
-
-    class Meta:
-        verbose_name = _("question layout")
-        verbose_name_plural = _("question layouts")
-        ordering = ["name"]
-        constraints = [
-            models.UniqueConstraint(Upper("name"), name="question_layout_name_ci_unique"),
-        ]
-
-    def __str__(self) -> str:
-        return self.name
+    def covers_level(self, level: int) -> bool:
+        low, high = self.level_range
+        return low <= level <= high
 
 
 class QuestionBank(BaseModel):
-    """A pool of questions for one class/subject/topic combination."""
+    """A curated pool of company-authored questions.
+
+    Convenience for browsing, not a structural boundary — the skill tags on
+    the questions are what actually organise the library.
+    """
 
     name = models.CharField(_("name"), max_length=255)
-    school_class = models.ForeignKey(
-        "schools.SchoolClass",
-        on_delete=models.CASCADE,
-        related_name="question_banks",
-        verbose_name=_("class"),
-    )
-    subject = models.ForeignKey(
-        Subject, on_delete=models.PROTECT, related_name="question_banks", verbose_name=_("subject")
-    )
-    topic = models.ForeignKey(
-        Topic, on_delete=models.PROTECT, related_name="question_banks", verbose_name=_("topic")
-    )
+    domain = models.CharField(_("domain"), max_length=16, choices=Domain.choices)
 
     class Meta:
         verbose_name = _("question bank")
         verbose_name_plural = _("question banks")
-        ordering = ["name"]
+        ordering = ["domain", "name"]
         constraints = [
             models.UniqueConstraint(
-                fields=["name", "school_class", "subject", "topic"],
-                name="question_bank_identity_unique",
-            ),
-        ]
-        indexes = [
-            # The bank browser filters on exactly this triple.
-            models.Index(
-                fields=["school_class", "subject", "topic"], name="qbank_class_subj_topic_idx"
+                Upper("name"), "domain", name="question_bank_name_domain_ci_unique"
             ),
         ]
 
@@ -116,10 +162,11 @@ class QuestionBank(BaseModel):
 
 
 class Question(BaseModel):
-    """A reusable question.
+    """A reusable, company-authored question.
 
-    `question_bank` is nullable so a question can exist as a draft, or be
-    orphaned when its bank is retired, without being destroyed.
+    Teachers never write into this table — they either pull a row into an
+    assessment or author directly onto the assessment. `question_bank` is
+    nullable so a question can be drafted, or outlive a retired bank.
     """
 
     question_bank = models.ForeignKey(
@@ -130,8 +177,13 @@ class Question(BaseModel):
         related_name="questions",
         verbose_name=_("question bank"),
     )
-    subject = models.ForeignKey(
-        Subject, on_delete=models.PROTECT, related_name="questions", verbose_name=_("subject")
+    subskill = models.ForeignKey(
+        Subskill, on_delete=models.PROTECT, related_name="questions", verbose_name=_("subskill")
+    )
+    fln_level = models.PositiveSmallIntegerField(
+        _("FLN level"),
+        validators=LEVEL_VALIDATORS,
+        help_text=_("The developmental level this question probes, 1 to 5."),
     )
     content = models.TextField(_("content"))
     # Kept alongside the richer `contents` blocks below: these two are the
@@ -153,19 +205,8 @@ class Question(BaseModel):
         related_name="questions_illustrated",
         verbose_name=_("image"),
     )
-    layout = models.ForeignKey(
-        QuestionLayout,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="questions",
-        verbose_name=_("layout"),
-    )
-    level = models.PositiveSmallIntegerField(
-        _("level"),
-        default=MIN_QUESTION_LEVEL,
-        validators=LEVEL_VALIDATORS,
-        help_text=_("Difficulty from 1 (easiest) to 5 (hardest)."),
+    layout = models.CharField(
+        _("layout"), max_length=32, choices=QuestionLayout.choices, blank=True
     )
     type = models.CharField(_("type"), max_length=32, choices=QuestionType.choices)
 
@@ -174,13 +215,14 @@ class Question(BaseModel):
         verbose_name_plural = _("questions")
         ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=["question_bank", "level"], name="question_bank_level_idx"),
-            models.Index(fields=["subject", "type"], name="question_subject_type_idx"),
+            # The bank browser filters on exactly this pair.
+            models.Index(fields=["subskill", "fln_level"], name="question_subskill_level_idx"),
+            models.Index(fields=["question_bank", "fln_level"], name="question_bank_level_idx"),
         ]
         constraints = [
             models.CheckConstraint(
-                condition=models.Q(level__gte=MIN_QUESTION_LEVEL, level__lte=MAX_QUESTION_LEVEL),
-                name="question_level_in_range",
+                condition=models.Q(fln_level__gte=MIN_FLN_LEVEL, fln_level__lte=MAX_FLN_LEVEL),
+                name="question_fln_level_in_range",
             ),
         ]
 
@@ -273,3 +315,14 @@ class Option(BaseModel):
 
     def __str__(self) -> str:
         return self.content[:60]
+
+
+__all__ = [
+    "Option",
+    "Question",
+    "QuestionAnswer",
+    "QuestionBank",
+    "QuestionContent",
+    "Skill",
+    "Subskill",
+]

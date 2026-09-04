@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import environ
+from celery.schedules import crontab
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -68,6 +69,8 @@ LOCAL_APPS = [
     "apps.curriculum",
     "apps.assessments",
     "apps.activities",
+    "apps.ai",
+    "apps.instruction",
     # Product surfaces — API only: routes, auth, permissions, services.
     "apps.school_portal",
     "apps.teacher_portal",
@@ -225,6 +228,14 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "anon": env("DRF_THROTTLE_ANON", default="60/min"),
         "user": env("DRF_THROTTLE_USER", default="1000/hour"),
+        # Verify is the one unauthenticated door into a child's paper, and the
+        # personal code is short enough to be typed. Rate limiting is what
+        # makes that length safe, so this is load-bearing rather than hygiene.
+        "sitting_verify": env("DRF_THROTTLE_VERIFY", default="10/min"),
+        # Every unauthenticated school endpoint takes an email address or a
+        # six-digit code, so each one is somewhere to sit and guess. The code
+        # is only short enough to type because this is here.
+        "school_auth": env("DRF_THROTTLE_SCHOOL_AUTH", default="15/min"),
     },
     "TEST_REQUEST_DEFAULT_FORMAT": "json",
 }
@@ -244,6 +255,37 @@ SIMPLE_JWT = {
     "USER_ID_CLAIM": "user_id",
     "TOKEN_OBTAIN_SERIALIZER": "apps.users.serializers.TokenObtainPairSerializer",
 }
+
+# How long a child's sitting session lasts. Long enough to pause mid-section
+# and come back; short enough that a session left open on a shared tablet is
+# useless by the next lesson. Sections taken on different days need the code
+# typed again, which is the point — the session covers a sitting, not a
+# relationship.
+SITTING_SESSION_HOURS = env.int("SITTING_SESSION_HOURS", default=3)
+
+# How long a soft-deleted student or teacher survives before the purge destroys
+# them. The window is what makes an immediate, irreversible-looking delete
+# button survivable: the row disappears from every list the moment it is
+# deleted, and only stops existing once a term-sized mistake would have been
+# noticed. Ninety days is roughly one term either side of a holiday.
+DELETED_ROW_RETENTION_DAYS = env.int("DELETED_ROW_RETENTION_DAYS", default=90)
+
+# ---------------------------------------------------------------------------
+# AI
+# ---------------------------------------------------------------------------
+# Off by default, and that is not only a development convenience: with it off
+# the system falls back to a scripted client, so the whole loop runs without a
+# model and a missing provider degrades rather than breaks.
+AI_ENABLED = env.bool("AI_ENABLED", default=False)
+AI_TIMEOUT_SECONDS = env.float("AI_TIMEOUT_SECONDS", default=60.0)
+
+OLLAMA_BASE_URL = env("OLLAMA_BASE_URL", default="http://localhost:11434")
+OLLAMA_MODEL = env("OLLAMA_MODEL", default="qwen3:14b")
+
+# Empty means no transcription service; spoken answers then stay pending for a
+# teacher rather than being marked on an empty transcript.
+WHISPER_BASE_URL = env("WHISPER_BASE_URL", default="")
+WHISPER_MODEL = env("WHISPER_MODEL", default="whisper-1")
 
 # Rotating this independently of SECRET_KEY invalidates all tokens without
 # invalidating sessions/signatures. Omitted by default: simplejwt then falls
@@ -265,6 +307,15 @@ SPECTACULAR_SETTINGS = {
     "SWAGGER_UI_DIST": "SIDECAR",
     "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
     "REDOC_DIST": "SIDECAR",
+    # Without these, a choice set reached through two differently-named fields
+    # is emitted twice under hashed names - "Type5e1Enum", "TypeC35Enum" - and
+    # a generated client ends up with two unrelated-looking types for one enum.
+    "ENUM_NAME_OVERRIDES": {
+        "AssessmentStatus": "apps.assessments.enums.AssessmentStatus.choices",
+        "QuestionType": "apps.common.enums.QuestionType.choices",
+        "CriterionType": "apps.instruction.enums.CriterionType.choices",
+        "MembershipReason": "apps.instruction.enums.MembershipReason.choices",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -286,6 +337,18 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_SEND_TASK_EVENTS = True
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_RESULT_EXTENDED = True
+
+# Beat entries are synced into the database by DatabaseScheduler on startup, so
+# this is the source of truth and the admin is the place to pause one.
+CELERY_BEAT_SCHEDULE = {
+    "purge-deleted-rows": {
+        "task": "apps.common.tasks.purge_deleted_rows_task",
+        # Nightly, well outside school hours. Nothing depends on the exact
+        # time - the cutoff is a date, so a missed run just purges more the
+        # next night.
+        "schedule": crontab(hour="2", minute="30"),
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Email
