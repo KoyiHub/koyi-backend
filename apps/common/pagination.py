@@ -5,7 +5,13 @@ from rest_framework.response import Response
 
 
 class DefaultPagination(PageNumberPagination):
-    """Page-number pagination with a client-controllable, capped page size."""
+    """Page-number pagination with a client-controllable, capped page size.
+
+    The envelope carries `page` and `num_pages` alongside the usual DRF keys so
+    a client can render numbered controls - "page 3 of 11" - rather than only
+    previous and next. On a roster of 240 children that difference is the
+    difference between finding a name and scrolling for it.
+    """
 
     page_size = 25
     page_size_query_param = "page_size"
@@ -21,7 +27,7 @@ class DefaultPagination(PageNumberPagination):
                 [
                     ("count", self.page.paginator.count),
                     ("page", self.page.number),
-                    ("pages", self.page.paginator.num_pages),
+                    ("num_pages", self.page.paginator.num_pages),
                     ("page_size", self.get_page_size(self.request)),
                     ("next", self.get_next_link()),
                     ("previous", self.get_previous_link()),

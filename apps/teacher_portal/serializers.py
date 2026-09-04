@@ -461,3 +461,235 @@ class AssessmentRosterSerializer(serializers.Serializer):
     opens_at = serializers.DateTimeField(allow_null=True)
     closes_at = serializers.DateTimeField(allow_null=True)
     rows = AssignmentRosterSerializer(many=True)
+
+
+# ---------------------------------------------------------------------------
+# Analytics
+# ---------------------------------------------------------------------------
+
+
+class MarkingStatusSerializer(serializers.Serializer):
+    """How much of the paper is actually marked.
+
+    Rendered wherever figures are shown. Free-form answers are marked
+    asynchronously, so a teacher opening this early is looking at numbers that
+    will still move.
+    """
+
+    total = serializers.IntegerField()
+    marked = serializers.IntegerField()
+    pending = serializers.IntegerField()
+    complete = serializers.BooleanField()
+
+
+class SkillCellSerializer(serializers.Serializer):
+    skill_id = serializers.CharField()
+    skill_name = serializers.CharField()
+    domain = serializers.CharField()
+    fln_level = serializers.IntegerField()
+    passed = serializers.IntegerField()
+    total = serializers.IntegerField()
+    pass_rate = serializers.FloatField()
+
+
+class MissedSubskillSerializer(serializers.Serializer):
+    subskill_id = serializers.CharField()
+    subskill_name = serializers.CharField()
+    skill_name = serializers.CharField()
+    domain = serializers.CharField()
+    fln_level = serializers.IntegerField()
+    failed = serializers.IntegerField()
+    total = serializers.IntegerField()
+    failed_pct = serializers.IntegerField()
+
+
+class NarrativeSerializer(serializers.Serializer):
+    summary = serializers.CharField(allow_blank=True)
+    attention = serializers.CharField(allow_blank=True)
+    strength = serializers.CharField(allow_blank=True)
+
+
+class AssessmentAnalyticsSerializer(serializers.Serializer):
+    """Lead with `level_distribution`, not `average_percentage`.
+
+    How many children sit at each level is what a teacher acts on; an average
+    across two independent domains describes neither.
+    """
+
+    assessment_id = serializers.CharField()
+    name = serializers.CharField()
+    code = serializers.CharField()
+    marking_status = MarkingStatusSerializer()
+    level_distribution = serializers.DictField()
+    participation = serializers.DictField()
+    section_completion = serializers.ListField(child=serializers.DictField())
+    skill_matrix = SkillCellSerializer(many=True)
+    most_missed = MissedSubskillSerializer(many=True)
+    average_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, allow_null=True)
+    warnings = serializers.ListField(child=serializers.CharField())
+    narrative = NarrativeSerializer(allow_null=True, required=False)
+
+
+class RosterEntrySerializer(serializers.Serializer):
+    student_id = serializers.CharField()
+    full_name = serializers.CharField()
+    school_class = serializers.CharField(allow_null=True)
+    literacy_level = serializers.IntegerField(allow_null=True)
+    numeracy_level = serializers.IntegerField(allow_null=True)
+    weak_subskills = serializers.ListField(child=serializers.CharField())
+
+
+class SkillStandingSerializer(serializers.Serializer):
+    skill_id = serializers.CharField()
+    skill_name = serializers.CharField()
+    domain = serializers.CharField()
+    highest_level_passed = serializers.IntegerField(allow_null=True)
+    broke_down_at = serializers.IntegerField(allow_null=True)
+    weak_subskills = serializers.ListField(child=serializers.CharField())
+
+
+class LevelMovementSerializer(serializers.Serializer):
+    domain = serializers.CharField()
+    previous = serializers.IntegerField(allow_null=True)
+    current = serializers.IntegerField(allow_null=True)
+    direction = serializers.CharField()
+
+
+class StudentBreakdownSerializer(serializers.Serializer):
+    """By skill, with level context. A percentage alone says nothing."""
+
+    student_id = serializers.CharField()
+    full_name = serializers.CharField()
+    school_class = serializers.CharField(allow_null=True)
+    literacy_level = serializers.IntegerField(allow_null=True)
+    numeracy_level = serializers.IntegerField(allow_null=True)
+    last_assessed_at = serializers.DateTimeField(allow_null=True)
+    skills = SkillStandingSerializer(many=True)
+    movement = LevelMovementSerializer(many=True)
+    narrative = NarrativeSerializer(allow_null=True, required=False)
+
+
+# ---------------------------------------------------------------------------
+# Response review
+# ---------------------------------------------------------------------------
+
+
+class ReviewedQuestionSerializer(serializers.ModelSerializer):
+    """One question as the child saw it, annotated with what happened.
+
+    Options carry both `is_correct` and `was_selected`, so the client can
+    render the green and red highlighting without a second request or any
+    cross-referencing of its own. This is the one place the answer key is
+    served - to a teacher, after the fact, never to the runner.
+    """
+
+    contents = serializers.SerializerMethodField()
+    options = serializers.SerializerMethodField()
+    response = serializers.SerializerMethodField()
+    subskill_name = serializers.CharField(source="subskill.name", read_only=True)
+    skill_name = serializers.CharField(source="skill.name", read_only=True)
+    section_name = serializers.CharField(source="section.name", read_only=True)
+
+    class Meta:
+        model = AssessmentQuestion
+        fields = [
+            "id",
+            "order",
+            "text",
+            "description",
+            "question_type",
+            "layout",
+            "point",
+            "fln_level",
+            "subskill_name",
+            "skill_name",
+            "section_name",
+            "contents",
+            "options",
+            "response",
+        ]
+
+    def get_contents(self, obj: AssessmentQuestion) -> list[dict]:
+        return [
+            {
+                "type": block.type,
+                "display_order": block.display_order,
+                "text_content": block.text_content,
+                "media": _media(block),
+                "alt_text": block.alt_text,
+                "caption": block.caption,
+            }
+            for block in obj.contents.all()
+        ]
+
+    def get_options(self, obj: AssessmentQuestion) -> list[dict]:
+        selected = self._selected_option_ids(obj)
+        return [
+            {
+                "id": str(option.pk),
+                "type": option.type,
+                "value": option.value,
+                "media": _media(option),
+                "is_correct": option.is_correct,
+                "was_selected": option.pk in selected,
+            }
+            for option in obj.options.all()
+        ]
+
+    def get_response(self, obj: AssessmentQuestion) -> dict | None:
+        """What the child gave, and how it was marked.
+
+        `is_correct` null means pending, not wrong - the AI marker has not
+        reached it, its confidence was too low to act on, or a recording
+        failed. The UI should offer a teacher the decision rather than
+        rendering it as an error.
+        """
+        response = self._response(obj)
+        if response is None:
+            return None
+        return {
+            "id": str(response.pk),
+            "text_value": response.text_value,
+            "transcript": response.transcript,
+            "media": (
+                {"id": str(response.media_value_id), "url": response.media_value.url}
+                if response.media_value_id
+                else None
+            ),
+            "is_correct": response.is_correct,
+            "awarded_points": response.awarded_points,
+            "graded_by": response.graded_by,
+            "grading_confidence": response.grading_confidence,
+            "error_type": response.error_type,
+            "observation_note": response.observation_note,
+        }
+
+    def _response(self, obj: AssessmentQuestion):
+        """The acting child's response, from the view's `to_attr` prefetch.
+
+        Read through `getattr` because the attribute is attached by the
+        queryset rather than declared on the model, so a serializer used
+        without that prefetch degrades to "no response" instead of raising.
+        """
+        return next(iter(getattr(obj, "student_responses", [])), None)
+
+    def _selected_option_ids(self, obj: AssessmentQuestion) -> set:
+        response = self._response(obj)
+        if response is None:
+            return set()
+        return {row.assessment_question_option_id for row in response.selected_options.all()}
+
+
+class ResponseReviewSerializer(serializers.Serializer):
+    """Everything a teacher needs to walk one child's paper."""
+
+    student_id = serializers.CharField()
+    full_name = serializers.CharField()
+    assessment_id = serializers.CharField()
+    assessment_name = serializers.CharField()
+    status = serializers.CharField()
+    items_attempted = serializers.IntegerField()
+    items_correct = serializers.IntegerField()
+    pending = serializers.IntegerField()
+    percentage = serializers.DecimalField(max_digits=5, decimal_places=2, allow_null=True)
+    questions = ReviewedQuestionSerializer(many=True)

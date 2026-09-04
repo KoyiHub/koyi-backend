@@ -7,7 +7,7 @@ teacher's own school is what scopes every query.
 
 from typing import TYPE_CHECKING, Any
 
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
@@ -15,6 +15,12 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.ai.jobs import explain_assessment, explain_student
+from apps.assessments.analytics import (
+    AssessmentAnalyticsService,
+    RosterService,
+    StudentBreakdownService,
+)
 from apps.assessments.dto import (
     AnswerInput,
     ContentBlockInput,
@@ -25,7 +31,12 @@ from apps.assessments.dto import (
     UpdateAssessmentInput,
     UpdateSectionInput,
 )
-from apps.assessments.models import Assessment
+from apps.assessments.models import (
+    Assessment,
+    AssessmentQuestion,
+    AssessmentQuestionResponse,
+    AssessmentResult,
+)
 from apps.assessments.repositories import (
     AssessmentQuestionRepository,
     AssessmentRepository,
@@ -44,6 +55,7 @@ from apps.curriculum.models import Question, Skill
 from apps.schools.models import Student
 from apps.teacher_portal.authentication import TeacherLoginSerializer
 from apps.teacher_portal.serializers import (
+    AssessmentAnalyticsSerializer,
     AssessmentCoverageSerializer,
     AssessmentQuestionSerializer,
     AssessmentRosterSerializer,
@@ -54,10 +66,13 @@ from apps.teacher_portal.serializers import (
     AssignSerializer,
     BankQuestionSerializer,
     QuestionListWriteSerializer,
+    ResponseReviewSerializer,
+    RosterEntrySerializer,
     SectionSerializer,
     SectionUpdateSerializer,
     SectionWriteSerializer,
     SkillSerializer,
+    StudentBreakdownSerializer,
 )
 
 TEACHER_AUTH_TAG = ["teacher: auth"]
@@ -428,6 +443,148 @@ class AssignmentRosterView(TeacherViewMixin, APIView):
                         }
                         for a in assignments
                     ],
+                }
+            ).data
+        )
+
+
+# ---------------------------------------------------------------------------
+# Analytics
+# ---------------------------------------------------------------------------
+
+
+@extend_schema(tags=TEACHER_TAG, responses={200: AssessmentAnalyticsSerializer})
+class AssessmentAnalyticsView(TeacherViewMixin, APIView):
+    """What a paper says about a class.
+
+    The numbers are computed here and now; the narrative is laid over them and
+    only appears once it has been generated. `?narrative=false` skips it, which
+    is what a dashboard tile should do.
+    """
+
+    serializer_class = AssessmentAnalyticsSerializer
+
+    def get(self, request: Request, pk) -> Response:
+        assessment = self.drafts.get(pk)
+        analytics = AssessmentAnalyticsService(assessment).build()
+        payload = AssessmentAnalyticsSerializer(analytics).data
+
+        if request.query_params.get("narrative", "true").lower() != "false":
+            payload["narrative"] = _narrative(explain_assessment, analytics)
+        return Response(payload)
+
+
+@extend_schema(tags=TEACHER_TAG, responses={200: RosterEntrySerializer(many=True)})
+class AssessmentRosterView(TeacherViewMixin, APIView):
+    """Who needs help, and with what.
+
+    The aggregates say how many children are at a level; this says which ones.
+    Filterable by `?domain=` and `?level=`.
+    """
+
+    serializer_class = RosterEntrySerializer
+
+    def get(self, request: Request, pk) -> Response:
+        assessment = self.drafts.get(pk)
+        level = request.query_params.get("level")
+        entries = RosterService(assessment).build(
+            domain=request.query_params.get("domain", ""),
+            level=int(level) if level and level.isdigit() else None,
+        )
+        return Response(RosterEntrySerializer(entries, many=True).data)
+
+
+@extend_schema(tags=TEACHER_TAG, responses={200: StudentBreakdownSerializer})
+class StudentBreakdownView(TeacherViewMixin, APIView):
+    """One child's standing, by skill, with level context."""
+
+    serializer_class = StudentBreakdownSerializer
+
+    def get(self, request: Request, pk) -> Response:
+        student = Student.objects.filter(pk=pk, school=self.school).first()
+        if student is None:
+            raise NotFoundError("No such student in this school.")
+
+        breakdown = StudentBreakdownService(student).build()
+        payload = StudentBreakdownSerializer(breakdown).data
+        if request.query_params.get("narrative", "true").lower() != "false":
+            payload["narrative"] = _narrative(explain_student, breakdown)
+        return Response(payload)
+
+
+def _narrative(job, subject) -> dict | None:
+    """Run a narrative job, and let the page render without it if it fails.
+
+    A model being down must not take the numbers with it. The figures are the
+    diagnosis; the prose is a convenience over them.
+    """
+    outcome = job(subject)
+    if outcome.value is None:
+        return None
+    return {
+        "summary": outcome.value.summary,
+        "attention": outcome.value.attention,
+        "strength": outcome.value.strength,
+    }
+
+
+@extend_schema(tags=TEACHER_TAG, responses={200: ResponseReviewSerializer})
+class ResponseReviewView(TeacherViewMixin, APIView):
+    """One child's paper, question by question, as they saw it.
+
+    Prefetched so the whole review is a handful of queries rather than one per
+    question — a paper can run to fifty items and this is opened per child.
+    """
+
+    serializer_class = ResponseReviewSerializer
+
+    def get(self, request: Request, pk, student_id) -> Response:  # noqa: ARG002
+        assessment = self.drafts.get(pk)
+        student = Student.objects.filter(pk=student_id, school=self.school).first()
+        if student is None:
+            raise NotFoundError("No such student in this school.")
+
+        responses = (
+            AssessmentQuestionResponse.objects.filter(student=student)
+            .prefetch_related("selected_options")
+            .select_related("media_value")
+        )
+
+        questions = (
+            AssessmentQuestion.objects.filter(assessment=assessment)
+            .select_related("subskill", "skill", "section")
+            .prefetch_related(
+                "contents__media",
+                "options__media",
+                Prefetch("responses", queryset=responses, to_attr="student_responses"),
+            )
+            .order_by("section__order", "order")
+        )
+
+        result = AssessmentResult.objects.filter(assessment=assessment, student=student).first()
+        marked = [
+            q.student_responses[0]
+            for q in questions
+            if q.student_responses and q.student_responses[0].is_correct is not None
+        ]
+
+        return Response(
+            ResponseReviewSerializer(
+                {
+                    "student_id": str(student.pk),
+                    "full_name": student.full_name,
+                    "assessment_id": str(assessment.pk),
+                    "assessment_name": assessment.name,
+                    "status": result.status if result else "",
+                    "items_attempted": len(marked),
+                    "items_correct": sum(1 for r in marked if r.is_correct),
+                    "pending": sum(
+                        1
+                        for q in questions
+                        if q.student_responses and q.student_responses[0].is_correct is None
+                    ),
+                    "percentage": result.percentage if result else None,
+                    "questions": questions,
                 }
             ).data
         )

@@ -120,11 +120,25 @@ deliberately indistinguishable), `409` conflict.
 
 ### Pagination
 
-List endpoints return 25 per page:
+List endpoints return 25 per page. The envelope carries enough for **numbered
+controls** — "page 3 of 11" — not just previous and next, because the rosters
+here run to a few hundred children:
 
 ```json
-{ "count": 120, "next": "...?page=2", "previous": null, "results": [ ... ] }
+{
+  "count": 240,
+  "page": 3,
+  "num_pages": 10,
+  "page_size": 25,
+  "next": "...?page=4",
+  "previous": "...?page=2",
+  "results": [ ... ]
+}
 ```
+
+`?page=` and `?page_size=` are accepted. `page_size` is **capped at 100** — a
+client asking for 5000 gets 100 back, and `page_size` in the response says what
+was actually applied, so always read it rather than echoing what you sent.
 
 Endpoints marked *unpaginated* return a bare array — reference data small
 enough that paging would only add a round trip.
@@ -582,6 +596,29 @@ compared across rounds — always send it when prefilling from the bank.
 | `comparison_panel_choice` → exactly 2–3 options | *"A comparison panel compares two or three things."* |
 | Option-rendering layout → option-based type | *"…renders options, but text questions have none."* |
 
+#### Question types
+
+The closed set, and which are option-based. The authoring form's validation
+(above) turns on this distinction, so it is worth stating exactly.
+
+| `question_type` | Answered by | Marking |
+|---|---|---|
+| `single_choice` | Picking **one** option | Deterministic, instant |
+| `multiple_choice` | Picking **several** options | Deterministic, instant. Exact set match — a partly-right selection is wrong |
+| `true_false` | Picking one of two options | Deterministic, instant |
+| `number` | Typing a number | Deterministic, instant. Compared numerically, so `" 22 "` matches `22` |
+| `text` | Typing words | AI, asynchronous |
+| `audio` | Speaking | Transcribed, then AI, asynchronous |
+| `file_upload` | Uploading a file | **No marker.** Stays pending for a teacher |
+
+**Option-based** means `single_choice`, `multiple_choice` and `true_false`.
+Those three require at least one option with `is_correct: true`; every other
+type must send **no options at all**. Both are `400`s.
+
+`number` should carry an `answer` object with the expected value — without one
+the item cannot be marked and stays pending, which is an authoring fault rather
+than a child's error.
+
 #### Question layouts
 
 Five, fixed. A layout the client cannot render is useless, so this is a closed
@@ -719,15 +756,15 @@ write on a board, so the classroom path needs this.
 Render it print-first: the assessment code once at the top, then a row per
 child. Codes should be legible at arm's length and easy to cut into slips.
 
-### 5.5 Results and analytics — Planned
+### 5.5 Results and analytics
 
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/v1/teacher/assessments/{id}/results/` | Every student: progress, score, level |
-| `GET` | `/v1/teacher/assessments/{id}/results/{studentId}/` | One child's outcome |
-| `GET` | `/v1/teacher/assessments/{id}/results/{studentId}/responses/` | The review view |
-| `GET` | `/v1/teacher/assessments/{id}/analytics/` | Aggregates + AI narrative |
-| `GET` | `/v1/teacher/assessments/{id}/analytics/roster/` | Who needs help |
+| Method | Path | Purpose | Status |
+|---|---|---|---|
+| `GET` | `/v1/teacher/assessments/{id}/analytics/` | Aggregates + AI narrative | **Built** |
+| `GET` | `/v1/teacher/assessments/{id}/analytics/roster/` | Who needs help | **Built** |
+| `GET` | `/v1/teacher/students/{id}/skills/` | One child, by skill | **Built** |
+| `GET` | `/v1/teacher/assessments/{id}/results/` | Every student: progress, score, level | Planned |
+| `GET` | `/v1/teacher/assessments/{id}/results/{studentId}/responses/` | The review view | **Built** |
 | `GET` | `/v1/teacher/assessments/{id}/review-queue/` | Responses the AI could not settle |
 
 The **responses** endpoint returns each question *as the child saw it* — layout,
@@ -752,7 +789,21 @@ Two consequences worth building for:
   a recording failed. Those need a teacher, and the review screen should offer
   that rather than rendering them as errors.
 
-**Analytics** must lead with level distribution, not a class average:
+#### `GET /v1/teacher/assessments/{id}/analytics/`
+
+Numbers computed deterministically, with an AI narrative laid over them. Pass
+`?narrative=false` to skip generating the prose — **the key stays, as `null`**,
+so a tile that does not want it need not branch on key existence.
+
+Three things to build around:
+
+- **`level_distribution` is the headline**, not `average_percentage`. Every
+  level is keyed even at zero, so a chart that drops empty levels would read as
+  a narrower spread than the class has. Both domains are always present.
+- **`narrative` is `null` when the model was unavailable.** The figures are the
+  diagnosis; the prose is a convenience over them. Render the page without it.
+- **`most_missed` is by subskill at a level**, not by question. "Simple
+  inference at Level 3" is teachable; "Q12" is not.
 
 ```json
 {
@@ -765,9 +816,93 @@ Two consequences worth building for:
   "skill_matrix": [ { "skill_name": "Reading Comprehension", "domain": "literacy",
                       "levels": { "3": { "passed": 12, "total": 25 } } } ],
   "most_missed": [ { "subskill_name": "Simple inference", "fln_level": 3, "failed_pct": 68 } ],
-  "narrative": { "summary": "...", "tags": [ { "type": "attention", "label": "Comprehension" } ] }
+  "average_percentage": "68.00",
+  "warnings": ["12 of 240 answers are still being marked. These figures will change."],
+  "narrative": { "summary": "...", "attention": "Simple inference", "strength": "Phonics" }
 }
 ```
+
+#### `GET /v1/teacher/assessments/{id}/analytics/roster/`
+
+Who needs help. Filter with `?domain=literacy&level=2`.
+
+```json
+[
+  { "student_id": "...", "full_name": "Amina Yusuf", "school_class": "Grade 2 A",
+    "literacy_level": 2, "numeracy_level": 4,
+    "weak_subskills": ["Simple inference (L3)", "Blending (L2)"] }
+]
+```
+
+#### `GET /v1/teacher/students/{id}/skills/`
+
+One child, by skill, with the level context a percentage alone cannot carry.
+
+```json
+{
+  "student_id": "...", "full_name": "Amina Yusuf",
+  "literacy_level": 2, "numeracy_level": 4, "last_assessed_at": "...",
+  "skills": [
+    { "skill_name": "Alphabetic Knowledge & Phonics", "domain": "literacy",
+      "highest_level_passed": 2, "broke_down_at": 3,
+      "weak_subskills": ["Consonant blends and digraphs (L3)"] }
+  ],
+  "movement": [ { "domain": "literacy", "previous": 1, "current": 2, "direction": "up" } ],
+  "narrative": { "summary": "...", "attention": "...", "strength": "" }
+}
+```
+
+#### `GET /v1/teacher/assessments/{id}/results/{studentId}/responses/`
+
+One child's paper, in sitting order, each question **as they saw it** — layout,
+content blocks, options — annotated with what happened.
+
+```json
+{
+  "student_id": "...", "full_name": "Amina Yusuf",
+  "assessment_id": "...", "assessment_name": "Term 1 baseline",
+  "status": "graded",
+  "items_attempted": 11, "items_correct": 7, "pending": 2,
+  "percentage": "63.64",
+  "questions": [
+    {
+      "id": "...", "order": 1, "text": "Which letter makes this sound?",
+      "question_type": "single_choice", "layout": "media_grid_choice",
+      "fln_level": 1, "subskill_name": "Letter sounds",
+      "skill_name": "Alphabetic Knowledge & Phonics", "section_name": "Reading",
+      "contents": [ ... ],
+      "options": [
+        { "id": "...", "value": "B", "is_correct": true,  "was_selected": false },
+        { "id": "...", "value": "D", "is_correct": false, "was_selected": true }
+      ],
+      "response": {
+        "id": "...", "text_value": "", "transcript": "",
+        "is_correct": false, "awarded_points": "0.00",
+        "graded_by": "auto", "grading_confidence": null,
+        "error_type": "substitution",
+        "observation_note": "Chose the visually similar letter."
+      }
+    }
+  ]
+}
+```
+
+Every option carries **both** `is_correct` and `was_selected`, so the green and
+red highlighting needs no cross-referencing and no second request. This is the
+only endpoint that serves the answer key — to a teacher, after the fact. The
+runner never receives it.
+
+`response` is `null` when the child did not answer at all. Inside it,
+**`is_correct: null` means pending, not wrong** — the AI marker has not reached
+it, its confidence was too low to act on, or a recording failed. Those are the
+`pending` count, and the UI should offer a teacher the decision rather than
+rendering them as errors. `items_attempted` and `items_correct` count only what
+was actually marked.
+
+`movement` compares the last two placements per domain. `direction` is `up`,
+`down`, `same` or `new` — and **`down` is not a failure to hide.** Placement is
+absolute, so a child can move down, and that is a reading rather than a
+regression to explain away.
 
 **Always show `marking_status`.** Free-form and audio items are marked
 asynchronously, so a teacher opening analytics early sees numbers that are still
@@ -1121,6 +1256,8 @@ designs:
 | Date | Change |
 |---|---|
 | 2026-09-04 | First version. Covers phases 0–2 as built, phases 3–7 as designed. |
+| 2026-09-04 | The response review endpoint is built. Pagination now carries `page`, `num_pages` and `page_size` for numbered controls — §2 previously documented the bare DRF default, which was wrong. The `question_type` closed set is documented. |
+| 2026-09-04 | Analytics, the roster and the student skill breakdown are built, each with an optional AI narrative that degrades to null. |
 | 2026-09-04 | The AI layer is built: provider-swappable marking of written and spoken answers, and subskill/level suggestion for authored questions. Marking now runs in two passes, so a level can change once free-form answers land. |
 | 2026-09-04 | Marking, the skill x level matrix and placement are built. Placement fires automatically on the final section submit. A level is the lowest probed level not passed — what to teach next, not what is mastered. |
 | 2026-09-04 | Email is the only channel for guardian links. The guardian phone number is informational and nothing is ever sent to it. |

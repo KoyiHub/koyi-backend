@@ -21,11 +21,14 @@ from apps.ai.enums import GenerationStatus, JobType
 from apps.ai.models import AIGeneration
 from apps.ai.schemas import (
     MARKING_SCHEMA,
+    NARRATIVE_SCHEMA,
     TAGGING_SCHEMA,
     MarkingVerdict,
+    Narrative,
     SchemaError,
     TagSuggestion,
     parse_marking,
+    parse_narrative,
     parse_tags,
 )
 from apps.ai.transcription import TranscriptionError, get_transcriber
@@ -230,6 +233,93 @@ def suggest_question_tags(*, text: str, options: list[str], subskills) -> JobOut
     )
 
 
+# ---------------------------------------------------------------------------
+# Narratives
+# ---------------------------------------------------------------------------
+
+
+def explain_assessment(analytics) -> JobOutcome[Narrative]:
+    """Put prose over a class result.
+
+    The figures are already computed and are passed in as text. The model is
+    explaining them, which is the only shape of AI work this product does on
+    the diagnosis side - nothing here changes a number.
+    """
+    return _run(
+        job=JobType.ASSESSMENT_ANALYTICS,
+        payload=_analytics_payload(analytics),
+        schema=NARRATIVE_SCHEMA,
+        parse=parse_narrative,
+        subject_type="assessment",
+        subject_id=analytics.assessment_id,
+    )
+
+
+def explain_student(breakdown) -> JobOutcome[Narrative]:
+    """Put prose over one child's result."""
+    return _run(
+        job=JobType.STUDENT_SKILL_NARRATIVE,
+        payload=_student_payload(breakdown),
+        schema=NARRATIVE_SCHEMA,
+        parse=parse_narrative,
+        subject_type="student",
+        subject_id=breakdown.student_id,
+    )
+
+
+def _analytics_payload(a) -> str:
+    lines = [
+        f"Assessment: {a.name}",
+        f"Marking: {a.marking_status.marked} of {a.marking_status.total} answers marked, "
+        f"{a.marking_status.pending} still pending.",
+        f"Participation: {a.participation['submitted']} of {a.participation['assigned']} "
+        "children submitted.",
+        "",
+        "Level distribution (children per level):",
+    ]
+    for domain, levels in a.level_distribution.items():
+        spread = ", ".join(f"L{level}: {count}" for level, count in levels.items())
+        lines.append(f"  {domain}: {spread}")
+
+    if a.skill_matrix:
+        lines += ["", "Pass rates by skill and level:"]
+        lines += [
+            f"  {cell.skill_name} ({cell.domain}) L{cell.fln_level}: {cell.passed}/{cell.total}"
+            for cell in a.skill_matrix
+        ]
+    if a.most_missed:
+        lines += ["", "Most missed subskills:"]
+        lines += [
+            f"  {m.subskill_name} (L{m.fln_level}, {m.skill_name}): {m.failed_pct}% did not pass"
+            for m in a.most_missed
+        ]
+    return "\n".join(lines)
+
+
+def _student_payload(b) -> str:
+    lines = [
+        f"Child: {b.full_name}",
+        f"Literacy level: {b.literacy_level if b.literacy_level is not None else 'not assessed'}",
+        f"Numeracy level: {b.numeracy_level if b.numeracy_level is not None else 'not assessed'}",
+    ]
+    if b.movement:
+        lines += ["", "Movement since the last assessment:"]
+        lines += [f"  {m.domain}: {m.previous} to {m.current} ({m.direction})" for m in b.movement]
+    if b.skills:
+        lines += ["", "By skill:"]
+        for skill in b.skills:
+            passed = skill.highest_level_passed
+            broke = skill.broke_down_at
+            lines.append(
+                f"  {skill.skill_name} ({skill.domain}): "
+                f"highest level passed {passed if passed is not None else 'none'}, "
+                f"broke down at {broke if broke is not None else 'not reached'}"
+            )
+            if skill.weak_subskills:
+                lines.append("    did not pass: " + ", ".join(skill.weak_subskills))
+    return "\n".join(lines)
+
+
 def apply_marking(response, verdict: MarkingVerdict, *, transcript: str = "") -> None:
     """Write a verdict onto a response.
 
@@ -260,8 +350,11 @@ def apply_marking(response, verdict: MarkingVerdict, *, transcript: str = "") ->
 __all__ = [
     "JobOutcome",
     "MarkingVerdict",
+    "Narrative",
     "TagSuggestion",
     "apply_marking",
+    "explain_assessment",
+    "explain_student",
     "mark_spoken_response",
     "mark_written_response",
     "suggest_question_tags",

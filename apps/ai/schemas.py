@@ -134,6 +134,43 @@ def parse_tags(payload: dict, *, known_subskills: dict) -> TagSuggestion:
     )
 
 
+# ---------------------------------------------------------------------------
+# Narratives
+# ---------------------------------------------------------------------------
+
+NARRATIVE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "maxLength": 900},
+        "attention": {"type": "string", "maxLength": 80},
+        "strength": {"type": "string", "maxLength": 80},
+    },
+    "required": ["summary", "attention", "strength"],
+    "additionalProperties": False,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class Narrative:
+    """Prose over figures that were already computed."""
+
+    summary: str
+    attention: str
+    strength: str
+
+
+def parse_narrative(payload: dict) -> Narrative:
+    summary = str(payload.get("summary") or "").strip()
+    if not summary:
+        # An empty summary is a failed generation wearing a valid shape.
+        raise SchemaError("summary is empty")
+    return Narrative(
+        summary=summary[:900],
+        attention=str(payload.get("attention") or "").strip()[:80],
+        strength=str(payload.get("strength") or "").strip()[:80],
+    )
+
+
 def _confidence(value) -> float:
     """Clamped rather than rejected.
 
@@ -149,10 +186,13 @@ def _confidence(value) -> float:
 __all__ = [
     "DEFAULT_CONFIDENCE_FLOOR",
     "MARKING_SCHEMA",
+    "NARRATIVE_SCHEMA",
     "TAGGING_SCHEMA",
     "MarkingVerdict",
+    "Narrative",
     "SchemaError",
     "TagSuggestion",
     "parse_marking",
+    "parse_narrative",
     "parse_tags",
 ]

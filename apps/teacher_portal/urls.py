@@ -57,6 +57,26 @@ urlpatterns = [
         name="assignment-roster",
     ),
     path(
+        "assessments/<uuid:pk>/analytics/",
+        views.AssessmentAnalyticsView.as_view(),
+        name="assessment-analytics",
+    ),
+    path(
+        "assessments/<uuid:pk>/analytics/roster/",
+        views.AssessmentRosterView.as_view(),
+        name="assessment-roster",
+    ),
+    path(
+        "assessments/<uuid:pk>/results/<uuid:student_id>/responses/",
+        views.ResponseReviewView.as_view(),
+        name="response-review",
+    ),
+    path(
+        "students/<uuid:pk>/skills/",
+        views.StudentBreakdownView.as_view(),
+        name="student-skills",
+    ),
+    path(
         "assessments/<uuid:pk>/publish/",
         views.AssessmentPublishView.as_view(),
         name="assessment-publish",
