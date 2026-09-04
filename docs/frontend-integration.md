@@ -728,15 +728,29 @@ child. Codes should be legible at arm's length and easy to cut into slips.
 | `GET` | `/v1/teacher/assessments/{id}/results/{studentId}/responses/` | The review view |
 | `GET` | `/v1/teacher/assessments/{id}/analytics/` | Aggregates + AI narrative |
 | `GET` | `/v1/teacher/assessments/{id}/analytics/roster/` | Who needs help |
+| `GET` | `/v1/teacher/assessments/{id}/review-queue/` | Responses the AI could not settle |
 
 The **responses** endpoint returns each question *as the child saw it* — layout,
 content blocks, options in order — annotated with what they chose and which was
 correct, so the review screen renders green/red without a second lookup.
 
 Placement runs automatically when a child submits their last section, so
-results appear without anyone triggering them. Objective items are marked
-immediately; free-text and audio wait for the AI marker, which is why
-`marking_status` matters below.
+results appear without anyone triggering them.
+
+It runs in **two passes**, and the UI has to expect that. Choice and number
+items are marked instantly and the child is placed on those. Written and spoken
+answers go to the AI marker afterwards, and when they land the child is placed
+again — so a level can change a few minutes after first appearing, without
+anything having been wrong.
+
+Two consequences worth building for:
+
+- **Always show `marking_status`.** A teacher opening analytics early sees
+  numbers that are still settling and needs to know it.
+- **A response with `is_correct: null` is pending, not wrong.** It happens when
+  the model was unavailable, when its confidence was too low to act on, or when
+  a recording failed. Those need a teacher, and the review screen should offer
+  that rather than rendering them as errors.
 
 **Analytics** must lead with level distribution, not a class average:
 
@@ -1107,6 +1121,7 @@ designs:
 | Date | Change |
 |---|---|
 | 2026-09-04 | First version. Covers phases 0–2 as built, phases 3–7 as designed. |
+| 2026-09-04 | The AI layer is built: provider-swappable marking of written and spoken answers, and subskill/level suggestion for authored questions. Marking now runs in two passes, so a level can change once free-form answers land. |
 | 2026-09-04 | Marking, the skill x level matrix and placement are built. Placement fires automatically on the final section submit. A level is the lowest probed level not passed — what to teach next, not what is mastered. |
 | 2026-09-04 | Email is the only channel for guardian links. The guardian phone number is informational and nothing is ever sent to it. |
 | 2026-09-04 | Guardian links are sent on demand by the teacher, not automatically on assignment. `Student.guardian_email` added — optional, since many guardians will not have one. |

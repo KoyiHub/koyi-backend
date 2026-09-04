@@ -44,6 +44,7 @@ def diagnose_student_task(self, assessment_id: str, student_id: str) -> dict:  #
         return {"placed": 0}
 
     placements = DiagnosisService().run(assessment, student)
+    _queue_free_form_marking(assessment_id, student_id)
     logger.info(
         "student diagnosed",
         extra={
@@ -77,3 +78,20 @@ def diagnose_assessment_task(self, assessment_id: str) -> dict:  # noqa: ARG001
     for student_id in finished:
         diagnose_student_task.delay(str(assessment_id), str(student_id))
     return {"queued": len(finished)}
+
+
+def _queue_free_form_marking(assessment_id: str, student_id: str) -> None:
+    """Hand anything the deterministic marker could not settle to the AI pass.
+
+    Only when there is something to hand over, so a paper of choice questions
+    never queues a model call. The AI pass re-runs diagnosis when it finishes,
+    which is safe because the chain is idempotent.
+    """
+    from apps.ai.tasks import mark_free_form_responses_task
+    from apps.assessments.models import AssessmentQuestionResponse
+
+    pending = AssessmentQuestionResponse.objects.filter(
+        assessment_id=assessment_id, student_id=student_id, is_correct__isnull=True
+    ).exists()
+    if pending:
+        mark_free_form_responses_task.delay(str(assessment_id), str(student_id))

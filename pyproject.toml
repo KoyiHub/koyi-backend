@@ -23,6 +23,9 @@ dependencies = [
     "django-celery-results>=2.6",
     "redis>=5.2",
 
+    # Outbound HTTP - the AI provider and the transcription service
+    "httpx>=0.28",
+
     # Runtime / ops
     "gunicorn>=23.0",
     "uvicorn[standard]>=0.34",

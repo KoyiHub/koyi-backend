@@ -68,6 +68,7 @@ LOCAL_APPS = [
     "apps.curriculum",
     "apps.assessments",
     "apps.activities",
+    "apps.ai",
     # Product surfaces — API only: routes, auth, permissions, services.
     "apps.school_portal",
     "apps.teacher_portal",
@@ -255,6 +256,23 @@ SIMPLE_JWT = {
 # typed again, which is the point — the session covers a sitting, not a
 # relationship.
 SITTING_SESSION_HOURS = env.int("SITTING_SESSION_HOURS", default=3)
+
+# ---------------------------------------------------------------------------
+# AI
+# ---------------------------------------------------------------------------
+# Off by default, and that is not only a development convenience: with it off
+# the system falls back to a scripted client, so the whole loop runs without a
+# model and a missing provider degrades rather than breaks.
+AI_ENABLED = env.bool("AI_ENABLED", default=False)
+AI_TIMEOUT_SECONDS = env.float("AI_TIMEOUT_SECONDS", default=60.0)
+
+OLLAMA_BASE_URL = env("OLLAMA_BASE_URL", default="http://localhost:11434")
+OLLAMA_MODEL = env("OLLAMA_MODEL", default="qwen3:14b")
+
+# Empty means no transcription service; spoken answers then stay pending for a
+# teacher rather than being marked on an empty transcript.
+WHISPER_BASE_URL = env("WHISPER_BASE_URL", default="")
+WHISPER_MODEL = env("WHISPER_MODEL", default="whisper-1")
 
 # Rotating this independently of SECRET_KEY invalidates all tokens without
 # invalidating sessions/signatures. Omitted by default: simplejwt then falls
