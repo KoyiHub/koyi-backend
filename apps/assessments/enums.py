@@ -72,3 +72,14 @@ class ErrorType(models.TextChoices):
     COMPUTATION = "computation", _("Computation slip")
     PARTIAL = "partial", _("Partially correct")
     OTHER = "other", _("Other")
+
+
+class CellOutcome(models.TextChoices):
+    """Whether one (subskill x level) cell was demonstrated.
+
+    Two values only. A cell with no items is not recorded at all, so absence
+    means "not probed" and there is no third state to reason about.
+    """
+
+    PASS = "pass", _("Pass")
+    FAIL = "fail", _("Fail")

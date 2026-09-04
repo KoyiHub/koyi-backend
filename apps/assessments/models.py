@@ -21,6 +21,7 @@ from django.utils.translation import gettext_lazy as _
 
 from apps.assessments.enums import (
     AssessmentStatus,
+    CellOutcome,
     ErrorType,
     GradedBy,
     ResultStatus,
@@ -782,3 +783,153 @@ class AssessmentAnalytics(BaseModel):
 
     def __str__(self) -> str:
         return f"Analytics for {self.assessment_id}"
+
+
+class PlacementRule(BaseModel):
+    """How many core skills must pass for one level to count as passed.
+
+    Stored per (domain, level) rather than as a single fraction, because a
+    fraction does not discretise at small N. No skill spans all five levels, so
+    the number applicable at each differs - two at literacy level 1, six at
+    level 3 - and three quarters of two rounds to "both". That is defensible at
+    the extremes and too strict in the middle of numeracy, where level 4 draws
+    on only three skills and would demand all of them.
+
+    Seeded from the taxonomy with `seed_placement_rules`, then tuned in place.
+    Re-run the seed after changing which levels a skill covers.
+    """
+
+    domain = models.CharField(_("domain"), max_length=16, choices=Domain.choices)
+    fln_level = models.PositiveSmallIntegerField(_("FLN level"), validators=LEVEL_VALIDATORS)
+    required_skills = models.PositiveSmallIntegerField(
+        _("required skills"),
+        help_text=_("How many core skills must pass at this level for it to be passed."),
+    )
+    applicable_skills = models.PositiveSmallIntegerField(
+        _("applicable skills"),
+        help_text=_("How many core skills cover this level. Recorded so drift is visible."),
+    )
+
+    class Meta:
+        verbose_name = _("placement rule")
+        verbose_name_plural = _("placement rules")
+        ordering = ["domain", "fln_level"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["domain", "fln_level"], name="placement_rule_domain_level_unique"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.domain} L{self.fln_level}: {self.required_skills}/{self.applicable_skills}"
+
+
+class SkillLevelResult(BaseModel):
+    """One cell of the diagnosis: how a child did on one subskill at one level.
+
+    Persisted rather than computed on demand, for three reasons. Placement can
+    be re-run after a threshold change without re-marking anything. Two rounds
+    can be diffed to show real movement. And the evidence behind a placement
+    stays inspectable when a school asks why a child was placed where they were.
+    """
+
+    assessment = models.ForeignKey(
+        Assessment,
+        on_delete=models.CASCADE,
+        related_name="skill_level_results",
+        verbose_name=_("assessment"),
+    )
+    student = models.ForeignKey(
+        "schools.Student",
+        on_delete=models.CASCADE,
+        related_name="skill_level_results",
+        verbose_name=_("student"),
+    )
+    skill = models.ForeignKey(
+        "curriculum.Skill",
+        on_delete=models.PROTECT,
+        related_name="level_results",
+        verbose_name=_("skill"),
+    )
+    subskill = models.ForeignKey(
+        "curriculum.Subskill",
+        on_delete=models.PROTECT,
+        related_name="level_results",
+        verbose_name=_("subskill"),
+    )
+    fln_level = models.PositiveSmallIntegerField(_("FLN level"), validators=LEVEL_VALIDATORS)
+    items_attempted = models.PositiveSmallIntegerField(_("items attempted"), default=0)
+    items_correct = models.PositiveSmallIntegerField(_("items correct"), default=0)
+    outcome = models.CharField(_("outcome"), max_length=8, choices=CellOutcome.choices)
+
+    class Meta:
+        verbose_name = _("skill level result")
+        verbose_name_plural = _("skill level results")
+        ordering = ["student", "skill__display_order", "fln_level"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["assessment", "student", "subskill", "fln_level"],
+                name="skill_level_result_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["assessment", "student"], name="slr_assess_student_idx"),
+            models.Index(fields=["student", "subskill"], name="slr_student_subskill_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.student_id} {self.subskill_id} L{self.fln_level}: {self.outcome}"
+
+
+class Placement(BaseModel):
+    """The level a child needs taught in one domain, from one assessment.
+
+    Placement is absolute: each assessment decides the level outright. A child
+    placed at 4 who later assesses at 2 is at 2. There is no promotion ladder
+    and nothing carried forward, so this row is a reading taken on a date, not
+    a rung a child holds.
+
+    `level` names what to teach next, not what has been mastered - it is the
+    lowest probed level they did not pass.
+    """
+
+    student = models.ForeignKey(
+        "schools.Student",
+        on_delete=models.CASCADE,
+        related_name="placements",
+        verbose_name=_("student"),
+    )
+    assessment = models.ForeignKey(
+        Assessment,
+        on_delete=models.CASCADE,
+        related_name="placements",
+        verbose_name=_("assessment"),
+    )
+    domain = models.CharField(_("domain"), max_length=16, choices=Domain.choices)
+    level = models.PositiveSmallIntegerField(
+        _("level"), null=True, blank=True, validators=LEVEL_VALIDATORS
+    )
+    levels_probed = models.JSONField(
+        _("levels probed"),
+        default=list,
+        help_text=_("Which levels this paper carried items for, in this domain."),
+    )
+    computed_at = models.DateTimeField(_("computed at"))
+
+    class Meta:
+        verbose_name = _("placement")
+        verbose_name_plural = _("placements")
+        ordering = ["-computed_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "assessment", "domain"], name="placement_unique"
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["student", "domain", "-computed_at"], name="placement_student_idx"
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.student_id} {self.domain}: L{self.level}"

@@ -103,6 +103,20 @@ class OptionType(models.TextChoices):
     TRUE_FALSE = "true_false", _("True / false")
 
 
+class SkillStateStatus(models.TextChoices):
+    """Where a child currently stands on one subskill.
+
+    Lives here rather than in `assessments` because `schools` reads it too, and
+    a foreign key between those two apps in both directions costs an extra
+    migration in each.
+    """
+
+    NOT_ASSESSED = "not_assessed", _("Not assessed")
+    WEAK = "weak", _("Weak")
+    DEVELOPING = "developing", _("Developing")
+    MASTERED = "mastered", _("Mastered")
+
+
 class ActivityAction(models.TextChoices):
     """Core actions recorded in the audit log."""
 

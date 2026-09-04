@@ -868,6 +868,21 @@ class AssessmentSittingService(BaseService):
             f"Assessment submitted #{self.assessment.code}",
             f"{self.student.full_name} finished the assessment.",
         )
+        self._enqueue_diagnosis()
+
+    def _enqueue_diagnosis(self) -> None:
+        """Hand the child off to be marked and placed.
+
+        After the transaction commits, not inside it: a worker that picks the
+        task up first would find no responses to mark.
+        """
+        from django.db.transaction import on_commit
+
+        from apps.assessments.tasks import diagnose_student_task
+
+        assessment_id = str(self.assessment.pk)
+        student_id = str(self.student.pk)
+        on_commit(lambda: diagnose_student_task.delay(assessment_id, student_id))
 
     def _mark_started(self, now) -> None:
         if self.assignment.status == ResultStatus.NOT_STARTED:

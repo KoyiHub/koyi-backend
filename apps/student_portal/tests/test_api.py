@@ -420,3 +420,55 @@ class TestPersonalCode:
         entry = Activity.objects.filter(student=student).first()
         assert entry is not None
         assert entry.metadata["assignment_code"] == assignment.code
+
+
+class TestDiagnosisOnSubmit:
+    """Finishing the paper should place the child, with no further step."""
+
+    def test_the_last_submission_produces_a_placement(
+        self, sitting, published, student, subskill, django_capture_on_commit_callbacks
+    ):
+        from apps.assessments.models import Placement, PlacementRule, SkillLevelResult
+        from apps.schools.models import StudentProfile
+
+        for level in (1, 2):
+            PlacementRule.objects.update_or_create(
+                domain=subskill.skill.domain,
+                fln_level=level,
+                defaults={"required_skills": 1, "applicable_skills": 1},
+            )
+
+        overview = sitting.get(reverse(OVERVIEW)).data
+        # Diagnosis is enqueued on_commit, which never fires inside the test's
+        # transaction unless the callbacks are captured and run explicitly.
+        with django_capture_on_commit_callbacks(execute=True):
+            for section in overview["sections"]:
+                start = sitting.post(
+                    reverse("v1:student_portal:section-start", args=[section["id"]])
+                )
+                for question in start.data["questions"]:
+                    sitting.put(
+                        reverse("v1:student_portal:save-response", args=[question["id"]]),
+                        {"option_ids": [question["options"][0]["id"]]},
+                        format="json",
+                    )
+                sitting.post(reverse("v1:student_portal:section-submit", args=[section["id"]]))
+
+        # Celery runs eagerly in tests, so the chain has completed by now.
+        assert SkillLevelResult.objects.filter(student=student).exists()
+        assert Placement.objects.filter(student=student).exists()
+        assert StudentProfile.objects.filter(student=student).exists()
+
+    def test_an_unfinished_paper_places_nobody(
+        self, sitting, student, django_capture_on_commit_callbacks
+    ):
+        from apps.assessments.models import Placement
+
+        overview = sitting.get(reverse(OVERVIEW)).data
+        first = overview["sections"][0]
+        with django_capture_on_commit_callbacks(execute=True):
+            sitting.post(reverse("v1:student_portal:section-start", args=[first["id"]]))
+            sitting.post(reverse("v1:student_portal:section-submit", args=[first["id"]]))
+
+        # One section in, one to go - nothing to place on yet.
+        assert not Placement.objects.filter(student=student).exists()

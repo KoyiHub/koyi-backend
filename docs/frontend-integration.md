@@ -43,6 +43,13 @@ Three things follow that shape the UI, and are worth holding onto:
    placed at Level 4 who later assesses at Level 2 *is* Level 2. There is no
    promotion ladder and no carry-forward.
 
+A fourth thing follows from how placement is computed, and it shapes several
+screens: **a level is what a child needs taught next, not what they have
+mastered.** It is the lowest level the paper probed that they did not pass. So
+"Level 2" reads as *working on Level 2*, never as *completed Level 2* — and a
+child who fails Level 3 while passing Level 4 is placed at 3, because that is
+the gap.
+
 ### The three surfaces
 
 | Surface | Who | Auth | Base |
@@ -686,10 +693,13 @@ needs to see which children those are rather than assuming everyone was reached.
 Assignment rows carry `link_sent_at` so the UI can show who has been contacted
 and offer "send" or "send again" per row.
 
-`Student` now carries `guardian_email` alongside the phone number. It is
-**optional** — not every guardian has an address — so the send endpoints must
-report which children could not be reached rather than failing silently, and
-the roster is the fallback for those.
+**Email is the only channel.** There is no SMS infrastructure, and
+`guardian_phone_number` is informational — never a delivery route.
+
+`guardian_email` is **optional**, because many guardians will not have one. So a
+child with no address on file simply cannot be sent a link: the send endpoints
+must report those children rather than failing silently, and the printed roster
+is how their codes reach them instead.
 
 #### `GET /v1/teacher/assessments/{id}/assignments/roster/` — Built
 
@@ -722,6 +732,11 @@ child. Codes should be legible at arm's length and easy to cut into slips.
 The **responses** endpoint returns each question *as the child saw it* — layout,
 content blocks, options in order — annotated with what they chose and which was
 correct, so the review screen renders green/red without a second lookup.
+
+Placement runs automatically when a child submits their last section, so
+results appear without anyone triggering them. Objective items are marked
+immediately; free-text and audio wait for the AI marker, which is why
+`marking_status` matters below.
 
 **Analytics** must lead with level distribution, not a class average:
 
@@ -1078,7 +1093,6 @@ designs:
 
 | Question | Blocks |
 |---|---|
-| Is SMS or WhatsApp needed alongside email? `guardian_email` now exists, but in Nigerian primary schools a phone number will often be the only contact that works. | Whether send-link needs a channel argument |
 | Should a teacher be able to send a link to a child with no guardian contact, by printing the code instead? | Assignment page fallbacks |
 | Are teacher password resets self-service, admin-triggered, or both? | Login page scope |
 | Does the school admin see individual assessment results, or only levels? | `/students/{id}/fln/` shape |
@@ -1093,5 +1107,7 @@ designs:
 | Date | Change |
 |---|---|
 | 2026-09-04 | First version. Covers phases 0–2 as built, phases 3–7 as designed. |
+| 2026-09-04 | Marking, the skill x level matrix and placement are built. Placement fires automatically on the final section submit. A level is the lowest probed level not passed — what to teach next, not what is mastered. |
+| 2026-09-04 | Email is the only channel for guardian links. The guardian phone number is informational and nothing is ever sent to it. |
 | 2026-09-04 | Guardian links are sent on demand by the teacher, not automatically on assignment. `Student.guardian_email` added — optional, since many guardians will not have one. |
 | 2026-09-04 | Sittings now open with two codes. The student id is no longer accepted — it is public, so it never proved anything. Each assignment carries its own code, readable by the teacher and embeddable in a guardian link. Adds the printable roster and rate limiting on verify. |

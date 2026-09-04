@@ -12,6 +12,7 @@ from django.db import models
 from django.db.models.functions import Upper
 from django.utils.translation import gettext_lazy as _
 
+from apps.common.enums import SkillStateStatus
 from apps.common.models import BaseModel
 from apps.schools.enums import ClassSystem, Gender, GuardianRelationship
 
@@ -273,12 +274,18 @@ class Student(BaseModel):
     )
     guardian_name = models.CharField(_("guardian name"), max_length=255)
     guardian_phone_number = models.CharField(
-        _("guardian phone number"), max_length=20, validators=[PHONE_VALIDATOR]
+        _("guardian phone number"),
+        max_length=20,
+        validators=[PHONE_VALIDATOR],
+        help_text=_("For the school's records. Nothing is ever sent to it."),
     )
     guardian_email = models.EmailField(
         _("guardian email"),
         blank=True,
-        help_text=_("Where an assessment link is sent. Not every guardian has one."),
+        help_text=_(
+            "The only channel an assessment link is sent on. Optional, because "
+            "many guardians will not have one - those children get a printed code."
+        ),
     )
     guardian_relationship = models.CharField(
         _("guardian relationship"), max_length=32, choices=GuardianRelationship.choices
@@ -320,5 +327,95 @@ __all__ = [
     "School",
     "SchoolClass",
     "Student",
+    "StudentProfile",
+    "StudentSkillState",
     "Teacher",
 ]
+
+
+class StudentProfile(BaseModel):
+    """What a child currently needs taught.
+
+    A derived cache: everything here is rebuildable from the `SkillLevelResult`
+    rows behind it. The ledger is the truth; this exists so a class list can be
+    rendered without recomputing thirty diagnoses. That also means a bug in the
+    placement rules is recoverable by replay rather than data surgery.
+
+    The two levels move independently. A child can be Level 4 in numeracy and
+    Level 2 in literacy, and there is deliberately no combined figure - an
+    average across two unrelated abilities would describe neither.
+
+    There is no foreign key to the `Placement` that produced each level. It
+    would point from `schools` into `assessments`, which already points back
+    here, and the cycle costs a second migration in both apps to buy one
+    indexed lookup. Ask `Placement` for the latest row instead.
+    """
+
+    student = models.OneToOneField(
+        Student, on_delete=models.CASCADE, related_name="profile", verbose_name=_("student")
+    )
+    literacy_level = models.PositiveSmallIntegerField(_("literacy level"), null=True, blank=True)
+    numeracy_level = models.PositiveSmallIntegerField(_("numeracy level"), null=True, blank=True)
+    last_assessed_at = models.DateTimeField(_("last assessed at"), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("student profile")
+        verbose_name_plural = _("student profiles")
+        indexes = [
+            models.Index(fields=["literacy_level"], name="profile_literacy_idx"),
+            models.Index(fields=["numeracy_level"], name="profile_numeracy_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.student_id}: lit {self.literacy_level}, num {self.numeracy_level}"
+
+
+class StudentSkillState(BaseModel):
+    """Where a child stands on one subskill, across every assessment so far.
+
+    The unit a lesson plan targets and a group forms around. Like
+    `StudentProfile` this is derived, and `evidence_count` is what makes a
+    claim of mastery answerable - it says how many times the child has actually
+    shown it, not just that they did once.
+    """
+
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name="skill_states",
+        verbose_name=_("student"),
+    )
+    subskill = models.ForeignKey(
+        "curriculum.Subskill",
+        on_delete=models.CASCADE,
+        related_name="student_states",
+        verbose_name=_("subskill"),
+    )
+    status = models.CharField(
+        _("status"),
+        max_length=16,
+        choices=SkillStateStatus.choices,
+        default=SkillStateStatus.NOT_ASSESSED,
+    )
+    highest_level_passed = models.PositiveSmallIntegerField(
+        _("highest level passed"), null=True, blank=True
+    )
+    evidence_count = models.PositiveSmallIntegerField(_("evidence count"), default=0)
+    last_observed_at = models.DateTimeField(_("last observed at"), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("student skill state")
+        verbose_name_plural = _("student skill states")
+        ordering = ["student", "subskill__skill__display_order", "subskill__display_order"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "subskill"], name="student_skill_state_unique"
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["student", "status"], name="skill_state_student_idx"),
+            models.Index(fields=["subskill", "status"], name="skill_state_subskill_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.student_id} {self.subskill_id}: {self.status}"
