@@ -46,6 +46,7 @@ from apps.teacher_portal.authentication import TeacherLoginSerializer
 from apps.teacher_portal.serializers import (
     AssessmentCoverageSerializer,
     AssessmentQuestionSerializer,
+    AssessmentRosterSerializer,
     AssessmentSerializer,
     AssessmentUpdateSerializer,
     AssessmentWriteSerializer,
@@ -389,3 +390,44 @@ class AssignmentDetailView(TeacherViewMixin, APIView):
             raise NotFoundError("No such assignment on this assessment.")
         AssessmentAssignmentService(self.school, self.teacher).revoke(assessment, assignment)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema(tags=TEACHER_TAG, responses={200: AssessmentRosterSerializer})
+class AssignmentRosterView(TeacherViewMixin, APIView):
+    """The printable code sheet for one paper.
+
+    Every child's personal code in one place, so the classroom path still
+    works now that there is no single code to write on a board.
+    """
+
+    serializer_class = AssessmentRosterSerializer
+
+    def get(self, request: Request, pk) -> Response:  # noqa: ARG002
+        assessment = self.drafts.get(pk)
+        assignments = assessment.assignments.select_related(
+            "student", "student__school_class__grade"
+        ).order_by("student__last_name", "student__first_name")
+
+        return Response(
+            AssessmentRosterSerializer(
+                {
+                    "assessment_id": assessment.pk,
+                    "assessment_name": assessment.name,
+                    "assessment_code": assessment.code,
+                    "opens_at": assessment.opens_at,
+                    "closes_at": assessment.closes_at,
+                    "rows": [
+                        {
+                            "student_name": a.student.full_name,
+                            "student_id": a.student.student_id,
+                            "school_class": (
+                                str(a.student.school_class) if a.student.school_class else None
+                            ),
+                            "code": a.code,
+                            "status": a.status,
+                        }
+                        for a in assignments
+                    ],
+                }
+            ).data
+        )

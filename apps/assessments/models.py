@@ -534,11 +534,23 @@ class AssessmentAssignment(BaseModel):
     paper and works through its sections in order. Per-section progress lives
     on `AssessmentSectionResult`.
 
-    A sitting is opened by typing the paper's code alongside the child's own
-    student id. That check mints a session, stored here as a hash so a leaked
-    database row cannot be replayed. The session is per assignment, not per
-    paper: the assessment code is shared by the whole class, so on its own it
-    could not tell one child from another.
+    `code` is what makes a sitting the child's own. The assessment code is
+    shared by everyone taking the paper, so on its own it identifies the paper
+    and nothing else; this one is personal, and a child opens their sitting by
+    giving both. It replaces asking for a student id, which was printed on a
+    card and known to every classmate — two public facts are not a credential.
+
+    It is stored in the clear on purpose: a teacher has to be able to read it
+    back to a child who has lost theirs, and you cannot hash something and also
+    show it to someone. That is an accepted trade. The code is scoped to one
+    child and one paper, stops working when the assessment closes, and grants
+    nothing beyond sitting that assessment.
+
+    Verifying with it mints a session (stored here as a hash) which is what
+    carries the sitting from request to request. The code is long-lived and
+    travels in a guardian's email; the session is short-lived and travels in a
+    header, so the durable secret is presented twice rather than on every
+    autosave for days.
     """
 
     assessment = models.ForeignKey(
@@ -561,6 +573,11 @@ class AssessmentAssignment(BaseModel):
         related_name="assignments_made",
         verbose_name=_("assigned by"),
     )
+    code = models.CharField(
+        _("code"),
+        max_length=16,
+        help_text=_("The child's personal code for this paper. Unique within it."),
+    )
     status = models.CharField(
         _("status"),
         max_length=16,
@@ -579,6 +596,11 @@ class AssessmentAssignment(BaseModel):
         constraints = [
             models.UniqueConstraint(
                 fields=["assessment", "student"], name="assignment_assessment_student_unique"
+            ),
+            # Only unique within one paper: a child gives the assessment code
+            # first, so the pair is what has to be unambiguous.
+            models.UniqueConstraint(
+                "assessment", Upper("code"), name="assignment_assessment_code_unique"
             ),
         ]
         indexes = [

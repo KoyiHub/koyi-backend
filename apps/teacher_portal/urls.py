@@ -52,6 +52,11 @@ urlpatterns = [
         name="assignment-detail",
     ),
     path(
+        "assessments/<uuid:pk>/assignments/roster/",
+        views.AssignmentRosterView.as_view(),
+        name="assignment-roster",
+    ),
+    path(
         "assessments/<uuid:pk>/publish/",
         views.AssessmentPublishView.as_view(),
         name="assessment-publish",

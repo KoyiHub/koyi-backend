@@ -405,6 +405,9 @@ class AssignmentSerializer(serializers.ModelSerializer):
             "student_name",
             "student_id",
             "school_class",
+            # The child's personal code. Readable by their teacher on purpose —
+            # a child who has lost theirs needs someone able to tell them.
+            "code",
             "status",
             "started_at",
             "submitted_at",
@@ -434,3 +437,27 @@ class AssignSerializer(serializers.Serializer):
                 "Give student_ids, class_ids, or set all_my_students."
             )
         return attrs
+
+
+class AssignmentRosterSerializer(serializers.Serializer):
+    """One row of the printable code sheet.
+
+    The classroom path needs this: with a personal code per child, a teacher
+    can no longer write one thing on a board, so they need something to hand
+    out or read from.
+    """
+
+    student_name = serializers.CharField()
+    student_id = serializers.CharField()
+    school_class = serializers.CharField(allow_null=True)
+    code = serializers.CharField()
+    status = serializers.CharField()
+
+
+class AssessmentRosterSerializer(serializers.Serializer):
+    assessment_id = serializers.UUIDField()
+    assessment_name = serializers.CharField()
+    assessment_code = serializers.CharField()
+    opens_at = serializers.DateTimeField(allow_null=True)
+    closes_at = serializers.DateTimeField(allow_null=True)
+    rows = AssignmentRosterSerializer(many=True)

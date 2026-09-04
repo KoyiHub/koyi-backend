@@ -90,7 +90,7 @@ def sitting(api_client, published, assignment, student):
     """A client holding a valid sitting session."""
     response = api_client.post(
         reverse(VERIFY),
-        {"code": published.code, "student_id": student.student_id},
+        {"assessment_code": published.code, "code": assignment.code},
         format="json",
     )
     assert response.status_code == 200
@@ -99,10 +99,10 @@ def sitting(api_client, published, assignment, student):
 
 
 class TestVerify:
-    def test_code_and_student_id_open_the_paper(self, api_client, published, assignment, student):
+    def test_two_codes_open_the_paper(self, api_client, published, assignment):
         response = api_client.post(
             reverse(VERIFY),
-            {"code": published.code, "student_id": student.student_id},
+            {"assessment_code": published.code, "code": assignment.code},
             format="json",
         )
         assert response.status_code == 200
@@ -117,40 +117,51 @@ class TestVerify:
     def test_code_is_case_insensitive(self, api_client, published, assignment, student):
         response = api_client.post(
             reverse(VERIFY),
-            {"code": published.code.lower(), "student_id": student.student_id},
+            {"assessment_code": published.code.lower(), "code": assignment.code.lower()},
             format="json",
         )
         assert response.status_code == 200
 
-    def test_an_unassigned_child_is_refused(self, api_client, published, assignment):
-        stranger = StudentFactory()
+    def test_an_unknown_personal_code_is_refused(self, api_client, published, assignment):
         response = api_client.post(
             reverse(VERIFY),
-            {"code": published.code, "student_id": stranger.student_id},
+            {"assessment_code": published.code, "code": "ZZZZZZ"},
             format="json",
         )
         assert response.status_code == 404
 
-    def test_a_wrong_code_and_a_wrong_id_are_indistinguishable(
+    def test_a_student_id_no_longer_opens_a_sitting(
         self, api_client, published, assignment, student
     ):
-        bad_code = api_client.post(
+        # It is printed on a card and known to every classmate; two public
+        # facts were never a credential.
+        response = api_client.post(
             reverse(VERIFY),
-            {"code": "ZZZZZZ", "student_id": student.student_id},
+            {"assessment_code": published.code, "code": student.student_id},
             format="json",
         )
-        bad_id = api_client.post(
-            reverse(VERIFY), {"code": published.code, "student_id": "NOPE"}, format="json"
+        assert response.status_code == 404
+
+    def test_both_kinds_of_wrong_code_read_the_same(self, api_client, published, assignment):
+        bad_assessment = api_client.post(
+            reverse(VERIFY),
+            {"assessment_code": "ZZZZZZ", "code": assignment.code},
+            format="json",
         )
-        # Otherwise the form becomes a way to discover real codes and ids.
-        assert bad_code.data["error"]["message"] == bad_id.data["error"]["message"]
+        bad_personal = api_client.post(
+            reverse(VERIFY),
+            {"assessment_code": published.code, "code": "ZZZZZZ"},
+            format="json",
+        )
+        # Otherwise the form becomes a way to discover which codes are real.
+        assert bad_assessment.data["error"]["message"] == bad_personal.data["error"]["message"]
 
     def test_a_closed_assessment_is_refused(self, api_client, published, assignment, student):
         published.closes_at = timezone.now() - timezone.timedelta(hours=1)
         published.save(update_fields=["closes_at"])
         response = api_client.post(
             reverse(VERIFY),
-            {"code": published.code, "student_id": student.student_id},
+            {"assessment_code": published.code, "code": assignment.code},
             format="json",
         )
         assert response.status_code == 400
@@ -161,7 +172,7 @@ class TestVerify:
         student.save(update_fields=["is_active"])
         response = api_client.post(
             reverse(VERIFY),
-            {"code": published.code, "student_id": student.student_id},
+            {"assessment_code": published.code, "code": assignment.code},
             format="json",
         )
         assert response.status_code == 404
@@ -251,7 +262,7 @@ class TestSessionScope:
 
         first = api_client.post(
             reverse(VERIFY),
-            {"code": published.code, "student_id": student.student_id},
+            {"assessment_code": published.code, "code": assignment.code},
             format="json",
         )
         api_client.credentials(HTTP_X_SITTING_SESSION=first.data["session"])
@@ -271,7 +282,7 @@ class TestSessionScope:
     ):
         response = api_client.post(
             reverse(VERIFY),
-            {"code": published.code, "student_id": student.student_id},
+            {"assessment_code": published.code, "code": assignment.code},
             format="json",
         )
         api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {response.data['session']}")
@@ -298,12 +309,12 @@ class TestSessionScope:
     ):
         first = api_client.post(
             reverse(VERIFY),
-            {"code": published.code, "student_id": student.student_id},
+            {"assessment_code": published.code, "code": assignment.code},
             format="json",
         )
         api_client.post(
             reverse(VERIFY),
-            {"code": published.code, "student_id": student.student_id},
+            {"assessment_code": published.code, "code": assignment.code},
             format="json",
         )
         # Moving to another tablet mid-paper should not leave the old one live.
@@ -315,7 +326,7 @@ class TestSessionScope:
     ):
         response = api_client.post(
             reverse(VERIFY),
-            {"code": published.code, "student_id": student.student_id},
+            {"assessment_code": published.code, "code": assignment.code},
             format="json",
         )
         assignment.refresh_from_db()
@@ -357,3 +368,55 @@ class TestTimer:
         assert row.expires_at is not None
         assert row.started_at is not None
         assert (row.expires_at - row.started_at) == timedelta(minutes=20)
+
+
+class TestPersonalCode:
+    """The code is what makes a sitting the child's own."""
+
+    def test_each_child_gets_a_different_code(self, published, teacher, student):
+        other = StudentFactory(school=teacher.school, school_class=student.school_class)
+        created = AssessmentAssignmentService(teacher.school, teacher).assign(
+            published, students=[student, other]
+        )
+        codes = {a.code for a in created}
+        assert len(codes) == 2
+        assert all(code for code in codes)
+
+    def test_one_child_s_code_does_not_open_another_s_sitting(
+        self, api_client, published, teacher, student
+    ):
+        other = StudentFactory(school=teacher.school, school_class=student.school_class)
+        _mine, theirs = AssessmentAssignmentService(teacher.school, teacher).assign(
+            published, students=[student, other]
+        )
+
+        response = api_client.post(
+            reverse(VERIFY),
+            {"assessment_code": published.code, "code": theirs.code},
+            format="json",
+        )
+        api_client.credentials(HTTP_X_SITTING_SESSION=response.data["session"])
+        overview = api_client.get(reverse(OVERVIEW))
+        assert overview.data["student_name"] == other.full_name
+
+    def test_the_code_avoids_ambiguous_characters(self, assignment):
+        # Read off a printed sheet by a child; O/0 and I/1 cost them a sitting.
+        assert not set(assignment.code) & set("OI0125SZ")
+
+    def test_the_code_is_readable_by_the_teacher(self, assignment):
+        # Stored in the clear on purpose — a child who has lost theirs needs
+        # someone who can tell them what it is.
+        assignment.refresh_from_db()
+        assert assignment.code
+
+    def test_verifying_is_recorded(self, api_client, published, assignment, student):
+        from apps.activities.models import Activity
+
+        api_client.post(
+            reverse(VERIFY),
+            {"assessment_code": published.code, "code": assignment.code},
+            format="json",
+        )
+        entry = Activity.objects.filter(student=student).first()
+        assert entry is not None
+        assert entry.metadata["assignment_code"] == assignment.code

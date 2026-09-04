@@ -11,10 +11,14 @@ from apps.assessments.models import AssessmentQuestion, AssessmentSection, Asses
 
 
 class VerifySerializer(serializers.Serializer):
-    """The form a child fills in to open a paper."""
+    """The form a child fills in to open a paper.
 
+    Two codes, both case insensitive: the assessment's says which paper, the
+    personal one says it is theirs. A guardian link fills in both.
+    """
+
+    assessment_code = serializers.CharField(max_length=16)
     code = serializers.CharField(max_length=16)
-    student_id = serializers.CharField(max_length=32)
 
 
 class SittingQuestionSerializer(serializers.ModelSerializer):

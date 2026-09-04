@@ -44,7 +44,10 @@ STORAGES = {
 REST_FRAMEWORK = {
     **REST_FRAMEWORK,
     "DEFAULT_THROTTLE_CLASSES": (),
-    "DEFAULT_THROTTLE_RATES": {},
+    # Scoped throttles stay declared: a view naming a scope with no rate raises
+    # ImproperlyConfigured, so dropping them here would hide a real misconfig.
+    # The rate is high enough not to interfere with a test run.
+    "DEFAULT_THROTTLE_RATES": {"sitting_verify": "1000/min"},
 }
 
 # Keep test output readable.

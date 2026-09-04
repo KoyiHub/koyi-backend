@@ -225,6 +225,10 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "anon": env("DRF_THROTTLE_ANON", default="60/min"),
         "user": env("DRF_THROTTLE_USER", default="1000/hour"),
+        # Verify is the one unauthenticated door into a child's paper, and the
+        # personal code is short enough to be typed. Rate limiting is what
+        # makes that length safe, so this is load-bearing rather than hygiene.
+        "sitting_verify": env("DRF_THROTTLE_VERIFY", default="10/min"),
     },
     "TEST_REQUEST_DEFAULT_FORMAT": "json",
 }

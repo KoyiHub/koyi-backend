@@ -583,7 +583,10 @@ class AssessmentAssignmentService(BaseService):
         self, assessment: Assessment, student, sections: list[AssessmentSection]
     ) -> AssessmentAssignment:
         assignment = AssessmentAssignment.objects.create(
-            assessment=assessment, student=student, assigned_by=self.teacher
+            assessment=assessment,
+            student=student,
+            assigned_by=self.teacher,
+            code=self._mint_code(assessment),
         )
         result = AssessmentResult.objects.create(
             assessment=assessment, student=student, status=ResultStatus.NOT_STARTED
@@ -598,6 +601,24 @@ class AssessmentAssignmentService(BaseService):
             for index, section in enumerate(sections)
         )
         return assignment
+
+    def _mint_code(self, assessment: Assessment) -> str:
+        """A personal code, unique within this paper.
+
+        Only has to be unambiguous alongside the assessment code the child
+        gives first, so it can stay short enough to read off a printed roster
+        and type without help.
+        """
+        taken = set(
+            AssessmentAssignment.objects.filter(assessment=assessment).values_list(
+                "code", flat=True
+            )
+        )
+        for _attempt in range(CODE_ATTEMPTS):
+            code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
+            if code not in taken:
+                return code
+        raise ValidationError("Could not allocate a student code, please retry.")
 
     def revoke(self, assessment: Assessment, assignment: AssessmentAssignment) -> None:
         if assignment.status != ResultStatus.NOT_STARTED:
@@ -626,23 +647,30 @@ class AssessmentAssignmentService(BaseService):
 class AssessmentAccessService(BaseService):
     """The door a child comes through.
 
-    Every refusal returns the same message. A child mistyping their id and a
-    child trying a paper they were not given must be indistinguishable, or the
-    form becomes a way to discover which codes and ids are real.
+    Two codes: the assessment's, which says which paper, and the child's own,
+    which says it is theirs. The personal code replaced asking for a student
+    id — that was printed on a card and known to every classmate, so the pair
+    was two public facts rather than a credential.
+
+    Every refusal returns the same message. A mistyped code and a paper a child
+    was never given must be indistinguishable, or the form becomes a way to
+    discover which codes are real.
     """
 
-    INVALID = "That assessment code and student id do not match an open assessment."
+    INVALID = "Those codes do not match an open assessment."
 
-    def verify(self, *, code: str, student_id: str) -> AssessmentAssignment:
-        assessment = Assessment.objects.filter(code__iexact=code.strip()).first()
+    def verify(self, *, assessment_code: str, code: str) -> AssessmentAssignment:
+        assessment = Assessment.objects.filter(code__iexact=assessment_code.strip()).first()
         if assessment is None:
             raise NotFoundError(self.INVALID)
 
         assignment = (
-            AssessmentAssignment.objects.select_related("assessment", "student")
+            AssessmentAssignment.objects.select_related(
+                "assessment", "student", "student__school", "student__school_class"
+            )
             .filter(
                 assessment=assessment,
-                student__student_id__iexact=student_id.strip(),
+                code__iexact=code.strip(),
                 student__is_active=True,
             )
             .first()
@@ -656,7 +684,29 @@ class AssessmentAccessService(BaseService):
                 "You have already finished this assessment.",
                 detail={"status": ["Already submitted."]},
             )
+        self._log(assignment)
         return assignment
+
+    def _log(self, assignment: AssessmentAssignment) -> None:
+        """Record every successful verify.
+
+        The product trusts that a child sat their own paper. This is what a
+        teacher can look at when that assumption seems wrong — the same code
+        opening a sitting twice, or after the child already finished.
+        """
+        from apps.common.services import ActivityService
+
+        student = assignment.student
+        ActivityService().record(
+            school=student.school,
+            action=ActivityAction.SECTION_STARTED,
+            label=f"Assessment opened #{assignment.assessment.code}",
+            description=f"{student.full_name} opened {assignment.assessment.name}.",
+            student=student,
+            school_class=student.school_class,
+            assessment=assignment.assessment,
+            metadata={"assignment_code": assignment.code},
+        )
 
     def _check_window(self, assessment: Assessment) -> None:
         if not assessment.is_sittable:

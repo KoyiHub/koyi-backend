@@ -14,6 +14,7 @@ from rest_framework.exceptions import NotAuthenticated
 from rest_framework.permissions import AllowAny
 from rest_framework.request import Request
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from apps.assessments.models import AssessmentQuestion
@@ -85,14 +86,20 @@ class SittingView(APIView):
 
 @extend_schema(tags=STUDENT_TAG)
 class VerifyView(APIView):
-    """Open a paper with its code and a student id.
+    """Open a paper with its code and the child's personal one.
+
+    Throttled, and that matters: this is the only unauthenticated way into a
+    sitting, and the personal code is short enough for a child to type. The
+    rate limit is what makes that length safe.
 
     Every failure returns the same message, so the form cannot be used to
-    discover which codes or student ids are real.
+    discover which codes are real.
     """
 
     permission_classes = [AllowAny]
     authentication_classes: list = []
+    throttle_scope = "sitting_verify"
+    throttle_classes = [ScopedRateThrottle]
     serializer_class = VerifySerializer
 
     @extend_schema(request=VerifySerializer, responses={200: SittingOverviewSerializer})

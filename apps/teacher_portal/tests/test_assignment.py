@@ -184,3 +184,46 @@ class TestRevoke:
         )
         # Their work would go with it.
         assert response.status_code == 400
+
+
+class TestCodes:
+    def test_the_assignment_list_carries_each_child_s_code(self, client, published, teacher):
+        student = StudentFactory(school=teacher.school)
+        client.post(
+            reverse(LIST_URL, args=[published.pk]),
+            {"student_ids": [str(student.pk)]},
+            format="json",
+        )
+        listed = client.get(reverse(LIST_URL, args=[published.pk]))
+        assert listed.status_code == 200
+        assert listed.data[0]["code"]
+
+    def test_the_roster_is_the_printable_code_sheet(self, client, published, teacher):
+        school_class = SchoolClassFactory(school=teacher.school)
+        for _ in range(3):
+            StudentFactory(school=teacher.school, school_class=school_class)
+        client.post(
+            reverse(LIST_URL, args=[published.pk]),
+            {"class_ids": [str(school_class.pk)]},
+            format="json",
+        )
+
+        roster = client.get(reverse("v1:teacher_portal:assignment-roster", args=[published.pk]))
+        assert roster.status_code == 200
+        assert roster.data["assessment_code"] == published.code
+        assert len(roster.data["rows"]) == 3
+        # One code per child, all distinct — there is no single code to write
+        # on a board any more.
+        codes = {row["code"] for row in roster.data["rows"]}
+        assert len(codes) == 3
+
+    def test_another_school_cannot_read_the_roster(self, api_client, published):
+        from rest_framework_simplejwt.tokens import RefreshToken
+
+        outsider = TeacherFactory()
+        token = RefreshToken.for_user(outsider.user).access_token
+        api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
+        response = api_client.get(
+            reverse("v1:teacher_portal:assignment-roster", args=[published.pk])
+        )
+        assert response.status_code == 404
