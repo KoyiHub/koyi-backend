@@ -663,6 +663,28 @@ Assignment rows carry the child's personal code:
 
 `status` is `not_started` → `in_progress` → `finished` → `graded`.
 
+#### Guardian links — Planned
+
+Links are **sent on demand by the teacher**, never automatically on assignment.
+A paper is often assigned days before it opens, and the teacher decides when a
+guardian should hear about it.
+
+```
+POST /v1/teacher/assessments/{id}/assignments/{assignmentId}/send-link/
+POST /v1/teacher/assessments/{id}/assignments/send-links/   { assignment_ids }
+```
+
+Both return the number sent and any that could not be, with a reason — a
+guardian with no contact details on file is the common case, and the teacher
+needs to see which children those are rather than assuming everyone was reached.
+
+Assignment rows carry `link_sent_at` so the UI can show who has been contacted
+and offer "send" or "send again" per row.
+
+> **Blocked.** `Student` holds a guardian name, phone number and relationship —
+> **no email address.** The channel needs deciding before this can be built; see
+> §10.
+
 #### `GET /v1/teacher/assessments/{id}/assignments/roster/` — Built
 
 The printable code sheet. With a code per child there is no longer one thing to
@@ -1050,7 +1072,8 @@ designs:
 
 | Question | Blocks |
 |---|---|
-| Are guardian links emailed automatically on assignment, or sent on demand? | Assignment page |
+| **Which channel carries a guardian link — email, SMS, or WhatsApp?** `Student` has a phone number but no email, so email needs a new field. In Nigerian primary schools SMS or WhatsApp may reach more guardians than email does. | Guardian links entirely |
+| Should a teacher be able to send a link to a child with no guardian contact, by printing the code instead? | Assignment page fallbacks |
 | Are teacher password resets self-service, admin-triggered, or both? | Login page scope |
 | Does the school admin see individual assessment results, or only levels? | `/students/{id}/fln/` shape |
 | Should the runner work on a phone, or tablet and up only? | Layout minimums |
@@ -1064,4 +1087,5 @@ designs:
 | Date | Change |
 |---|---|
 | 2026-09-04 | First version. Covers phases 0–2 as built, phases 3–7 as designed. |
+| 2026-09-04 | Guardian links are sent on demand by the teacher, not automatically on assignment. |
 | 2026-09-04 | Sittings now open with two codes. The student id is no longer accepted — it is public, so it never proved anything. Each assignment carries its own code, readable by the teacher and embeddable in a guardian link. Adds the printable roster and rate limiting on verify. |
