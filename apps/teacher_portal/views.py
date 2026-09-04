@@ -7,6 +7,7 @@ teacher's own school is what scopes every query.
 
 from typing import TYPE_CHECKING, Any
 
+from django.db.models import Q
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
@@ -32,12 +33,15 @@ from apps.assessments.repositories import (
     TaxonomyRepository,
 )
 from apps.assessments.services import (
+    AssessmentAssignmentService,
     AssessmentCoverageService,
     AssessmentDraftService,
     AssessmentPublishService,
 )
 from apps.common.permissions import IsTeacher, acting_teacher
+from apps.common.services import NotFoundError
 from apps.curriculum.models import Question, Skill
+from apps.schools.models import Student
 from apps.teacher_portal.authentication import TeacherLoginSerializer
 from apps.teacher_portal.serializers import (
     AssessmentCoverageSerializer,
@@ -45,6 +49,8 @@ from apps.teacher_portal.serializers import (
     AssessmentSerializer,
     AssessmentUpdateSerializer,
     AssessmentWriteSerializer,
+    AssignmentSerializer,
+    AssignSerializer,
     BankQuestionSerializer,
     QuestionListWriteSerializer,
     SectionSerializer,
@@ -325,3 +331,61 @@ def _question_input(row: dict) -> QuestionInput:
         options=tuple(OptionInput(**option) for option in row.get("options", [])),
         answer=AnswerInput(**answer) if answer else None,
     )
+
+
+@extend_schema(tags=TEACHER_TAG)
+class AssignmentListCreateView(TeacherViewMixin, APIView):
+    """Who is sitting this paper."""
+
+    serializer_class = AssignmentSerializer
+
+    @extend_schema(responses={200: AssignmentSerializer(many=True)})
+    def get(self, request: Request, pk) -> Response:  # noqa: ARG002
+        assessment = self.drafts.get(pk)
+        assignments = assessment.assignments.select_related(
+            "student", "student__school_class__grade"
+        ).order_by("student__last_name", "student__first_name")
+        return Response(AssignmentSerializer(assignments, many=True).data)
+
+    @extend_schema(request=AssignSerializer, responses={201: AssignmentSerializer(many=True)})
+    def post(self, request: Request, pk) -> Response:
+        serializer = AssignSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        assessment = self.drafts.get(pk)
+
+        students = self._resolve_students(serializer.validated_data)
+        created = AssessmentAssignmentService(self.school, self.teacher).assign(
+            assessment, students=students
+        )
+        return Response(
+            AssignmentSerializer(created, many=True).data, status=status.HTTP_201_CREATED
+        )
+
+    def _resolve_students(self, data: dict):
+        """Only ever the teacher's own school, whatever the client asked for."""
+        queryset = Student.objects.filter(school=self.school, is_active=True)
+        if data["all_my_students"]:
+            return list(queryset.select_related("school_class"))
+
+        filters = Q()
+        if data["student_ids"]:
+            filters |= Q(pk__in=data["student_ids"])
+        if data["class_ids"]:
+            filters |= Q(school_class_id__in=data["class_ids"])
+        return list(queryset.filter(filters).select_related("school_class"))
+
+
+@extend_schema(tags=TEACHER_TAG)
+class AssignmentDetailView(TeacherViewMixin, APIView):
+    """Withdraw an assignment, while it is still safe to do so."""
+
+    serializer_class = AssignmentSerializer
+
+    @extend_schema(responses={204: None})
+    def delete(self, request: Request, pk, assignment_id) -> Response:  # noqa: ARG002
+        assessment = self.drafts.get(pk)
+        assignment = assessment.assignments.filter(pk=assignment_id).first()
+        if assignment is None:
+            raise NotFoundError("No such assignment on this assessment.")
+        AssessmentAssignmentService(self.school, self.teacher).revoke(assessment, assignment)
+        return Response(status=status.HTTP_204_NO_CONTENT)

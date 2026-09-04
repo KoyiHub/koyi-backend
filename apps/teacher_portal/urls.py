@@ -42,6 +42,16 @@ urlpatterns = [
         name="assessment-coverage",
     ),
     path(
+        "assessments/<uuid:pk>/assignments/",
+        views.AssignmentListCreateView.as_view(),
+        name="assignment-list",
+    ),
+    path(
+        "assessments/<uuid:pk>/assignments/<uuid:assignment_id>/",
+        views.AssignmentDetailView.as_view(),
+        name="assignment-detail",
+    ),
+    path(
         "assessments/<uuid:pk>/publish/",
         views.AssessmentPublishView.as_view(),
         name="assessment-publish",

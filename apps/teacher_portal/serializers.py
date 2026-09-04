@@ -11,6 +11,7 @@ from rest_framework import serializers
 
 from apps.assessments.models import (
     Assessment,
+    AssessmentAssignment,
     AssessmentQuestion,
     AssessmentQuestionContent,
     AssessmentQuestionOption,
@@ -384,3 +385,52 @@ class AssessmentCoverageSerializer(serializers.Serializer):
     domains = serializers.ListField(child=serializers.CharField())
     levels_probed = serializers.ListField(child=serializers.IntegerField())
     warnings = serializers.ListField(child=serializers.CharField())
+
+
+# ---------------------------------------------------------------------------
+# Assignment
+# ---------------------------------------------------------------------------
+
+
+class AssignmentSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source="student.full_name", read_only=True)
+    student_id = serializers.CharField(source="student.student_id", read_only=True)
+    school_class = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AssessmentAssignment
+        fields = [
+            "id",
+            "student",
+            "student_name",
+            "student_id",
+            "school_class",
+            "status",
+            "started_at",
+            "submitted_at",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_school_class(self, obj: AssessmentAssignment) -> str | None:
+        school_class = obj.student.school_class
+        return str(school_class) if school_class else None
+
+
+class AssignSerializer(serializers.Serializer):
+    """Who should sit this paper.
+
+    Three ways to say it, because a teacher thinks in whole classes far more
+    often than in individual children. At least one must be given.
+    """
+
+    student_ids = serializers.ListField(child=serializers.UUIDField(), required=False, default=list)
+    class_ids = serializers.ListField(child=serializers.UUIDField(), required=False, default=list)
+    all_my_students = serializers.BooleanField(default=False)
+
+    def validate(self, attrs: dict) -> dict:
+        if not (attrs["student_ids"] or attrs["class_ids"] or attrs["all_my_students"]):
+            raise serializers.ValidationError(
+                "Give student_ids, class_ids, or set all_my_students."
+            )
+        return attrs

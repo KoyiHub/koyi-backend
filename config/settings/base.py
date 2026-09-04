@@ -245,6 +245,13 @@ SIMPLE_JWT = {
     "TOKEN_OBTAIN_SERIALIZER": "apps.users.serializers.TokenObtainPairSerializer",
 }
 
+# How long a child's sitting session lasts. Long enough to pause mid-section
+# and come back; short enough that a session left open on a shared tablet is
+# useless by the next lesson. Sections taken on different days need the code
+# typed again, which is the point — the session covers a sitting, not a
+# relationship.
+SITTING_SESSION_HOURS = env.int("SITTING_SESSION_HOURS", default=3)
+
 # Rotating this independently of SECRET_KEY invalidates all tokens without
 # invalidating sessions/signatures. Omitted by default: simplejwt then falls
 # back to SECRET_KEY, resolved after settings are fully loaded.

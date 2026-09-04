@@ -17,7 +17,7 @@ from rest_framework.request import Request
 from apps.common.enums import UserRole
 
 if TYPE_CHECKING:
-    from apps.schools.models import School, Student, Teacher
+    from apps.schools.models import School, Teacher
 
 
 def acting_school(request: Request) -> "School":
@@ -33,11 +33,6 @@ def acting_school(request: Request) -> "School":
 def acting_teacher(request: Request) -> "Teacher":
     """The teacher behind the request, guaranteed by `IsTeacher`."""
     return request.user.teacher  # type: ignore[union-attr]
-
-
-def acting_student(request: Request) -> "Student":
-    """The student behind a sitting token, guaranteed by `IsStudent`."""
-    return request.user.student  # type: ignore[union-attr]
 
 
 class RoleRequired(BasePermission):
@@ -75,21 +70,6 @@ class IsTeacher(RoleRequired):
 
     def has_permission(self, request: Request, view: Any) -> bool:
         return super().has_permission(request, view) and hasattr(request.user, "teacher")
-
-
-class IsStudent(BasePermission):
-    """The student assessment runner.
-
-    Students authenticate through `StudentJWTAuthentication`, which installs a
-    `StudentPrincipal` rather than a `User`; checking for that attribute is
-    what distinguishes them from a staff token replayed at a student URL.
-    """
-
-    message = "A student assessment session is required."
-
-    def has_permission(self, request: Request, view: Any) -> bool:  # noqa: ARG002
-        principal = getattr(request, "user", None)
-        return bool(principal is not None and getattr(principal, "is_student", False))
 
 
 class IsVerifiedSchoolAdmin(IsSchoolAdmin):
@@ -173,27 +153,6 @@ class TeacherScopedMixin(ScopedMixinBase):
         if self.teacher_lookup is not None:
             queryset = queryset.filter(**{self.teacher_lookup: self.teacher})
         return queryset
-
-    def get_queryset(self) -> QuerySet:
-        return self.filter_to_tenant(super().get_queryset())
-
-
-class StudentScopedMixin(ScopedMixinBase):
-    """Locks a view to the acting student."""
-
-    permission_classes: Any = [IsStudent]
-
-    #: ORM path from this view's model to `schools.Student`.
-    student_lookup: ClassVar[str | None] = "student"
-
-    @property
-    def student(self) -> "Student":
-        return acting_student(self.request)
-
-    def filter_to_tenant(self, queryset: QuerySet) -> QuerySet:
-        if self.student_lookup is None:
-            return queryset.filter(pk=self.student.pk)
-        return queryset.filter(**{self.student_lookup: self.student})
 
     def get_queryset(self) -> QuerySet:
         return self.filter_to_tenant(super().get_queryset())

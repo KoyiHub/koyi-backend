@@ -26,14 +26,19 @@ from apps.assessments.dto import (
     UpdateAssessmentInput,
     UpdateSectionInput,
 )
-from apps.assessments.enums import AssessmentStatus
+from apps.assessments.enums import AssessmentStatus, ResultStatus, SectionResultStatus
 from apps.assessments.models import (
     Assessment,
+    AssessmentAssignment,
     AssessmentQuestion,
     AssessmentQuestionAnswer,
     AssessmentQuestionContent,
     AssessmentQuestionOption,
+    AssessmentQuestionResponse,
+    AssessmentQuestionResponseOption,
+    AssessmentResult,
     AssessmentSection,
+    AssessmentSectionResult,
 )
 from apps.assessments.repositories import (
     AssessmentQuestionRepository,
@@ -530,3 +535,320 @@ class AssessmentPublishService(BaseService):
             if not self.assessments.code_taken(code):
                 return code
         raise ValidationError("Could not allocate an assessment code, please retry.")
+
+
+class AssessmentAssignmentService(BaseService):
+    """Puts a published paper in front of the children who should sit it.
+
+    Assignment creates the whole shell up front — the assignment, the result,
+    and one section result per section — so "not started" is a real row rather
+    than an absence. The first section is unlocked and the rest are not.
+    """
+
+    def __init__(self, school, teacher=None) -> None:
+        self.school = school
+        self.teacher = teacher
+        self.assessments = AssessmentRepository(school)
+
+    @transaction.atomic
+    def assign(self, assessment: Assessment, *, students) -> list[AssessmentAssignment]:
+        if assessment.status == AssessmentStatus.DRAFT:
+            raise ValidationError(
+                "Publish the assessment before assigning it.",
+                detail={"status": ["This assessment is still a draft."]},
+            )
+        sections = list(assessment.sections.order_by("order"))
+        if not sections:
+            raise ValidationError("This assessment has no sections.")
+
+        existing = set(
+            AssessmentAssignment.objects.filter(
+                assessment=assessment, student__in=students
+            ).values_list("student_id", flat=True)
+        )
+        created: list[AssessmentAssignment] = []
+        for student in students:
+            # Assigning twice is a normal thing for a teacher to do — adding a
+            # latecomer to a class that is already assigned — so it is a no-op
+            # rather than an error.
+            if student.pk in existing:
+                continue
+            created.append(self._assign_one(assessment, student, sections))
+
+        if created:
+            self._log(assessment, len(created))
+        return created
+
+    def _assign_one(
+        self, assessment: Assessment, student, sections: list[AssessmentSection]
+    ) -> AssessmentAssignment:
+        assignment = AssessmentAssignment.objects.create(
+            assessment=assessment, student=student, assigned_by=self.teacher
+        )
+        result = AssessmentResult.objects.create(
+            assessment=assessment, student=student, status=ResultStatus.NOT_STARTED
+        )
+        AssessmentSectionResult.objects.bulk_create(
+            AssessmentSectionResult(
+                result=result,
+                section=section,
+                # Only the first is reachable; each submission unlocks the next.
+                status=(SectionResultStatus.UNLOCKED if index == 0 else SectionResultStatus.LOCKED),
+            )
+            for index, section in enumerate(sections)
+        )
+        return assignment
+
+    def revoke(self, assessment: Assessment, assignment: AssessmentAssignment) -> None:
+        if assignment.status != ResultStatus.NOT_STARTED:
+            raise ValidationError(
+                "This child has already started; their work would be lost.",
+                detail={"status": [assignment.status]},
+            )
+        AssessmentResult.objects.filter(assessment=assessment, student=assignment.student).delete()
+        assignment.delete()
+
+    def _log(self, assessment: Assessment, count: int) -> None:
+        from apps.common.services import ActivityService
+
+        ActivityService().record(
+            school=self.school,
+            action=ActivityAction.ASSESSMENT_ASSIGNED,
+            label=f"Assessment assigned #{assessment.code}",
+            description=f'"{assessment.name}" was assigned to {count} student(s).',
+            teacher=self.teacher,
+            assessment=assessment,
+            actor_user=self.teacher.user if self.teacher else None,
+            metadata={"count": count},
+        )
+
+
+class AssessmentAccessService(BaseService):
+    """The door a child comes through.
+
+    Every refusal returns the same message. A child mistyping their id and a
+    child trying a paper they were not given must be indistinguishable, or the
+    form becomes a way to discover which codes and ids are real.
+    """
+
+    INVALID = "That assessment code and student id do not match an open assessment."
+
+    def verify(self, *, code: str, student_id: str) -> AssessmentAssignment:
+        assessment = Assessment.objects.filter(code__iexact=code.strip()).first()
+        if assessment is None:
+            raise NotFoundError(self.INVALID)
+
+        assignment = (
+            AssessmentAssignment.objects.select_related("assessment", "student")
+            .filter(
+                assessment=assessment,
+                student__student_id__iexact=student_id.strip(),
+                student__is_active=True,
+            )
+            .first()
+        )
+        if assignment is None:
+            raise NotFoundError(self.INVALID)
+
+        self._check_window(assignment.assessment)
+        if assignment.status == ResultStatus.FINISHED:
+            raise ValidationError(
+                "You have already finished this assessment.",
+                detail={"status": ["Already submitted."]},
+            )
+        return assignment
+
+    def _check_window(self, assessment: Assessment) -> None:
+        if not assessment.is_sittable:
+            raise ValidationError(
+                "This assessment is not open.",
+                detail={"status": [assessment.status]},
+            )
+        now = timezone.now()
+        if assessment.opens_at and now < assessment.opens_at:
+            raise ValidationError("This assessment has not opened yet.")
+        if assessment.closes_at and now > assessment.closes_at:
+            raise ValidationError("This assessment has closed.")
+
+
+class AssessmentSittingService(BaseService):
+    """One child working through one paper.
+
+    Sections unlock in order and each is submitted explicitly, but the paper
+    finalises itself when the last one lands. There is no final submit button:
+    a child who answers everything and misses one more tap would lose the whole
+    sitting, and that is a placement failure, not a UX annoyance.
+    """
+
+    def __init__(self, assignment: AssessmentAssignment) -> None:
+        self.assignment = assignment
+        self.assessment = assignment.assessment
+        self.student = assignment.student
+
+    @property
+    def result(self) -> AssessmentResult:
+        return AssessmentResult.objects.get(assessment=self.assessment, student=self.student)
+
+    def section_results(self):
+        return (
+            AssessmentSectionResult.objects.filter(result=self.result)
+            .select_related("section")
+            .order_by("section__order")
+        )
+
+    def get_section_result(self, section_id) -> AssessmentSectionResult:
+        row = self.section_results().filter(section_id=section_id).first()
+        if row is None:
+            raise NotFoundError("No such section on this assessment.")
+        return row
+
+    @transaction.atomic
+    def start_section(self, section_id) -> AssessmentSectionResult:
+        row = self.get_section_result(section_id)
+        if row.status == SectionResultStatus.LOCKED:
+            raise ValidationError(
+                "Finish the earlier sections first.",
+                detail={"status": ["This section is locked."]},
+            )
+        if row.status == SectionResultStatus.SUBMITTED:
+            raise ValidationError(
+                "You have already finished this section.",
+                detail={"status": ["Already submitted."]},
+            )
+
+        now = timezone.now()
+        if row.status == SectionResultStatus.UNLOCKED:
+            row.status = SectionResultStatus.IN_PROGRESS
+            row.started_at = now
+            # A timed section is bounded from the moment it is opened, not
+            # from when the paper was assigned.
+            if row.section.timer:
+                row.expires_at = now + row.section.timer
+            row.save(update_fields=["status", "started_at", "expires_at", "updated_at"])
+            self._mark_started(now)
+            self._log(
+                ActivityAction.SECTION_STARTED,
+                f"Assessment started #{self.assessment.code}",
+                f"{self.student.full_name} started {row.section.name}.",
+            )
+        return row
+
+    def save_response(self, *, question, text_value="", media=None, option_ids=()):
+        """Upsert one answer. Idempotent, so a flaky connection cannot double-write."""
+        row = self.get_section_result(question.section_id)
+        self._require_in_progress(row)
+
+        response, _created = AssessmentQuestionResponse.objects.update_or_create(
+            assessment_question=question,
+            student=self.student,
+            defaults={
+                "assessment": self.assessment,
+                "type": question.question_type,
+                "text_value": text_value,
+                "media_value": media,
+            },
+        )
+        response.selected_options.all().delete()
+        if option_ids:
+            valid = AssessmentQuestionOption.objects.filter(
+                assessment_question=question, pk__in=option_ids
+            )
+            AssessmentQuestionResponseOption.objects.bulk_create(
+                AssessmentQuestionResponseOption(
+                    assessment_question_response=response, assessment_question_option=option
+                )
+                for option in valid
+            )
+        return response
+
+    @transaction.atomic
+    def submit_section(self, section_id) -> AssessmentSectionResult:
+        row = self.get_section_result(section_id)
+        if row.status == SectionResultStatus.SUBMITTED:
+            return row
+        self._require_in_progress(row)
+
+        now = timezone.now()
+        row.status = SectionResultStatus.SUBMITTED
+        row.submitted_at = now
+        row.items_attempted = AssessmentQuestionResponse.objects.filter(
+            student=self.student, assessment_question__section_id=section_id
+        ).count()
+        row.save(update_fields=["status", "submitted_at", "items_attempted", "updated_at"])
+        self._log(
+            ActivityAction.SECTION_SUBMITTED,
+            f"Section submitted #{self.assessment.code}",
+            f"{self.student.full_name} submitted {row.section.name}.",
+        )
+
+        self._unlock_next()
+        return row
+
+    def _unlock_next(self) -> None:
+        """Open the next unsubmitted section, or close the paper if none is left."""
+        remaining = (
+            self.section_results()
+            .exclude(status=SectionResultStatus.SUBMITTED)
+            .order_by("section__order")
+        )
+        following = remaining.first()
+        if following is None:
+            self._finalise()
+            return
+        if following.status == SectionResultStatus.LOCKED:
+            following.status = SectionResultStatus.UNLOCKED
+            following.save(update_fields=["status", "updated_at"])
+
+    def _finalise(self) -> None:
+        """Every section is in. Close the paper without asking again."""
+        now = timezone.now()
+        result = self.result
+        result.status = ResultStatus.FINISHED
+        result.items_attempted = AssessmentQuestionResponse.objects.filter(
+            student=self.student, assessment=self.assessment
+        ).count()
+        result.save(update_fields=["status", "items_attempted", "updated_at"])
+
+        self.assignment.status = ResultStatus.FINISHED
+        self.assignment.submitted_at = now
+        self.assignment.save(update_fields=["status", "submitted_at", "updated_at"])
+
+        self._log(
+            ActivityAction.ASSESSMENT_SUBMITTED,
+            f"Assessment submitted #{self.assessment.code}",
+            f"{self.student.full_name} finished the assessment.",
+        )
+
+    def _mark_started(self, now) -> None:
+        if self.assignment.status == ResultStatus.NOT_STARTED:
+            self.assignment.status = ResultStatus.IN_PROGRESS
+            self.assignment.started_at = now
+            self.assignment.save(update_fields=["status", "started_at", "updated_at"])
+            AssessmentResult.objects.filter(
+                assessment=self.assessment, student=self.student
+            ).update(status=ResultStatus.IN_PROGRESS)
+
+    def _require_in_progress(self, row: AssessmentSectionResult) -> None:
+        if row.status != SectionResultStatus.IN_PROGRESS:
+            raise ValidationError(
+                "Start this section before answering.",
+                detail={"status": [row.status]},
+            )
+        if row.expires_at and timezone.now() > row.expires_at:
+            raise ValidationError(
+                "Time is up for this section.",
+                detail={"status": ["The timer has run out."]},
+            )
+
+    def _log(self, action: str, label: str, description: str) -> None:
+        from apps.common.services import ActivityService
+
+        ActivityService().record(
+            school=self.student.school,
+            action=action,
+            label=label,
+            description=description,
+            student=self.student,
+            school_class=self.student.school_class,
+            assessment=self.assessment,
+        )

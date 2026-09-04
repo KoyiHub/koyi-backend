@@ -534,8 +534,11 @@ class AssessmentAssignment(BaseModel):
     paper and works through its sections in order. Per-section progress lives
     on `AssessmentSectionResult`.
 
-    The guardian link is a signed token delivered out of band; only its hash is
-    stored, so a leaked database row cannot be replayed to open a sitting.
+    A sitting is opened by typing the paper's code alongside the child's own
+    student id. That check mints a session, stored here as a hash so a leaked
+    database row cannot be replayed. The session is per assignment, not per
+    paper: the assessment code is shared by the whole class, so on its own it
+    could not tell one child from another.
     """
 
     assessment = models.ForeignKey(
@@ -566,8 +569,8 @@ class AssessmentAssignment(BaseModel):
     )
     started_at = models.DateTimeField(_("started at"), null=True, blank=True)
     submitted_at = models.DateTimeField(_("submitted at"), null=True, blank=True)
-    access_token_hash = models.CharField(_("access token hash"), max_length=128, blank=True)
-    token_expires_at = models.DateTimeField(_("token expires at"), null=True, blank=True)
+    session_hash = models.CharField(_("session hash"), max_length=64, blank=True, db_index=True)
+    session_expires_at = models.DateTimeField(_("session expires at"), null=True, blank=True)
 
     class Meta:
         verbose_name = _("assessment assignment")
