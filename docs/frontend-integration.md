@@ -314,8 +314,13 @@ they authored survive with the author cleared.
 | `POST` | `/v1/school/students/transfer-class/` | `{ from_class, to_class }` | Planned |
 
 `POST` takes first/last name, date of birth, gender, class, and guardian name,
-phone and relationship. `student_id` is generated — never accepted as input,
-and never editable, because it is what the child types to sit an assessment.
+phone, email and relationship. **`guardian_email` is optional** — many guardians
+will not have one — but it is where an assessment link is sent, so the form
+should say what it is for rather than presenting it as another blank field.
+
+`student_id` is generated — never accepted as input and never editable. It
+identifies the child in lists and on their card; it is **not** what they type to
+sit an assessment (that is the assignment code).
 
 An **active student always has a class**; only a disabled one may sit outside
 the structure. The API enforces this, so a UI that lets someone clear a class
@@ -681,9 +686,10 @@ needs to see which children those are rather than assuming everyone was reached.
 Assignment rows carry `link_sent_at` so the UI can show who has been contacted
 and offer "send" or "send again" per row.
 
-> **Blocked.** `Student` holds a guardian name, phone number and relationship —
-> **no email address.** The channel needs deciding before this can be built; see
-> §10.
+`Student` now carries `guardian_email` alongside the phone number. It is
+**optional** — not every guardian has an address — so the send endpoints must
+report which children could not be reached rather than failing silently, and
+the roster is the fallback for those.
 
 #### `GET /v1/teacher/assessments/{id}/assignments/roster/` — Built
 
@@ -1072,7 +1078,7 @@ designs:
 
 | Question | Blocks |
 |---|---|
-| **Which channel carries a guardian link — email, SMS, or WhatsApp?** `Student` has a phone number but no email, so email needs a new field. In Nigerian primary schools SMS or WhatsApp may reach more guardians than email does. | Guardian links entirely |
+| Is SMS or WhatsApp needed alongside email? `guardian_email` now exists, but in Nigerian primary schools a phone number will often be the only contact that works. | Whether send-link needs a channel argument |
 | Should a teacher be able to send a link to a child with no guardian contact, by printing the code instead? | Assignment page fallbacks |
 | Are teacher password resets self-service, admin-triggered, or both? | Login page scope |
 | Does the school admin see individual assessment results, or only levels? | `/students/{id}/fln/` shape |
@@ -1087,5 +1093,5 @@ designs:
 | Date | Change |
 |---|---|
 | 2026-09-04 | First version. Covers phases 0–2 as built, phases 3–7 as designed. |
-| 2026-09-04 | Guardian links are sent on demand by the teacher, not automatically on assignment. |
+| 2026-09-04 | Guardian links are sent on demand by the teacher, not automatically on assignment. `Student.guardian_email` added — optional, since many guardians will not have one. |
 | 2026-09-04 | Sittings now open with two codes. The student id is no longer accepted — it is public, so it never proved anything. Each assignment carries its own code, readable by the teacher and embeddable in a guardian link. Adds the printable roster and rate limiting on verify. |

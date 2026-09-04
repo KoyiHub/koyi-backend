@@ -75,4 +75,5 @@ class StudentFactory(DjangoModelFactory):
     gender = "female"
     guardian_name = factory.Faker("name")
     guardian_phone_number = "08012345678"
+    guardian_email = factory.Sequence(lambda n: f"guardian{n}@example.com")
     guardian_relationship = "mother"

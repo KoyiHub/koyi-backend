@@ -275,6 +275,11 @@ class Student(BaseModel):
     guardian_phone_number = models.CharField(
         _("guardian phone number"), max_length=20, validators=[PHONE_VALIDATOR]
     )
+    guardian_email = models.EmailField(
+        _("guardian email"),
+        blank=True,
+        help_text=_("Where an assessment link is sent. Not every guardian has one."),
+    )
     guardian_relationship = models.CharField(
         _("guardian relationship"), max_length=32, choices=GuardianRelationship.choices
     )

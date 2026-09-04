@@ -227,6 +227,7 @@ class StudentSerializer(serializers.ModelSerializer):
             "school_class",
             "guardian_name",
             "guardian_phone_number",
+            "guardian_email",
             "guardian_relationship",
             "created_at",
             "updated_at",
@@ -247,6 +248,7 @@ class StudentWriteSerializer(serializers.ModelSerializer):
             "school_class",
             "guardian_name",
             "guardian_phone_number",
+            "guardian_email",
             "guardian_relationship",
         ]
 
