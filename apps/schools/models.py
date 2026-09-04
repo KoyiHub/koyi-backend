@@ -13,7 +13,7 @@ from django.db.models.functions import Upper
 from django.utils.translation import gettext_lazy as _
 
 from apps.common.enums import SkillStateStatus
-from apps.common.models import BaseModel
+from apps.common.models import BaseModel, SoftDeleteModel
 from apps.schools.enums import ClassSystem, Gender, GuardianRelationship
 
 #: Abbreviations become the visible prefix of every student/teacher id, so they
@@ -191,8 +191,16 @@ class School(BaseModel):
         return self.user.email_verified
 
 
-class Teacher(BaseModel):
-    """A member of teaching staff. Logs in; owns assessments."""
+class Teacher(SoftDeleteModel, BaseModel):
+    """A member of teaching staff. Logs in; owns assessments.
+
+    Soft-deleted rather than removed. Removing a teacher outright would take
+    their groups with them and blank the author of every assessment they wrote,
+    the moment an administrator clicked a button they might have misread. The
+    row is hidden immediately and destroyed by the purge once the retention
+    window has passed - long enough that a mistake is recoverable, short enough
+    that "we deleted them" stays true.
+    """
 
     user = models.OneToOneField(
         "users.User",
@@ -238,12 +246,17 @@ class Teacher(BaseModel):
         return f"{self.first_name} {self.last_name}".strip()
 
 
-class Student(BaseModel):
+class Student(SoftDeleteModel, BaseModel):
     """A learner.
 
     Has no `User`: students never sign in with a password. They are admitted to
     an assessment by `apps.student_portal`, which mints a short-lived,
     student-scoped token.
+
+    Soft-deleted, like `Teacher`, and for a sharper reason: a child's results
+    cascade off this row. Hard-deleting on request would destroy a term of
+    diagnosis on a misclick, with nothing to restore from. The purge does that
+    later, deliberately, once the retention window has passed.
     """
 
     school = models.ForeignKey(

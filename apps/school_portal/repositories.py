@@ -7,6 +7,7 @@ it forgets to filter.
 
 from django.db.models import Count, Q, QuerySet
 
+from apps.activities.models import Activity
 from apps.assessments.enums import ResultStatus
 from apps.assessments.models import Assessment, AssessmentResult
 from apps.common.repositories import BaseRepository
@@ -124,6 +125,43 @@ class SchoolClassRepository(TenantScopedRepository):
 
     def has_students(self, school_class: SchoolClass) -> bool:
         return school_class.students.exists()
+
+
+class ActivityRepository(TenantScopedRepository):
+    """The school's audit log, newest first.
+
+    Every filter here corresponds to a column on the table rather than a key
+    inside `metadata`, which is why those foreign keys exist: a feed you cannot
+    narrow to one teacher or one child is a wall of text nobody reads.
+    """
+
+    model = Activity
+    select_related = ("teacher", "student", "school_class", "school_class__grade", "assessment")
+
+    def feed(
+        self,
+        *,
+        teacher_id=None,
+        student_id=None,
+        school_class_id=None,
+        action: str = "",
+        occurred_from=None,
+        occurred_to=None,
+    ) -> QuerySet[Activity]:
+        queryset = self.get_queryset()
+        if teacher_id:
+            queryset = queryset.filter(teacher_id=teacher_id)
+        if student_id:
+            queryset = queryset.filter(student_id=student_id)
+        if school_class_id:
+            queryset = queryset.filter(school_class_id=school_class_id)
+        if action:
+            queryset = queryset.filter(action=action)
+        if occurred_from:
+            queryset = queryset.filter(occurred_at__gte=occurred_from)
+        if occurred_to:
+            queryset = queryset.filter(occurred_at__lte=occurred_to)
+        return queryset.order_by("-occurred_at")
 
 
 class ReferenceDataRepository:

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import environ
+from celery.schedules import crontab
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -231,6 +232,10 @@ REST_FRAMEWORK = {
         # personal code is short enough to be typed. Rate limiting is what
         # makes that length safe, so this is load-bearing rather than hygiene.
         "sitting_verify": env("DRF_THROTTLE_VERIFY", default="10/min"),
+        # Every unauthenticated school endpoint takes an email address or a
+        # six-digit code, so each one is somewhere to sit and guess. The code
+        # is only short enough to type because this is here.
+        "school_auth": env("DRF_THROTTLE_SCHOOL_AUTH", default="15/min"),
     },
     "TEST_REQUEST_DEFAULT_FORMAT": "json",
 }
@@ -257,6 +262,13 @@ SIMPLE_JWT = {
 # typed again, which is the point — the session covers a sitting, not a
 # relationship.
 SITTING_SESSION_HOURS = env.int("SITTING_SESSION_HOURS", default=3)
+
+# How long a soft-deleted student or teacher survives before the purge destroys
+# them. The window is what makes an immediate, irreversible-looking delete
+# button survivable: the row disappears from every list the moment it is
+# deleted, and only stops existing once a term-sized mistake would have been
+# noticed. Ninety days is roughly one term either side of a holiday.
+DELETED_ROW_RETENTION_DAYS = env.int("DELETED_ROW_RETENTION_DAYS", default=90)
 
 # ---------------------------------------------------------------------------
 # AI
@@ -325,6 +337,18 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_SEND_TASK_EVENTS = True
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_RESULT_EXTENDED = True
+
+# Beat entries are synced into the database by DatabaseScheduler on startup, so
+# this is the source of truth and the admin is the place to pause one.
+CELERY_BEAT_SCHEDULE = {
+    "purge-deleted-rows": {
+        "task": "apps.common.tasks.purge_deleted_rows_task",
+        # Nightly, well outside school hours. Nothing depends on the exact
+        # time - the cutoff is a date, so a missed run just purges more the
+        # next night.
+        "schedule": crontab(hour="2", minute="30"),
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Email

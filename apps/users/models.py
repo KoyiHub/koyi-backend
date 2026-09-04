@@ -7,6 +7,7 @@ from django.utils.translation import gettext_lazy as _
 
 from apps.common.enums import UserRole
 from apps.common.models import BaseModel
+from apps.users.enums import VerificationPurpose
 from apps.users.managers import UserManager
 
 
@@ -86,3 +87,62 @@ class User(AbstractBaseUser, PermissionsMixin, BaseModel):
     @property
     def is_teacher(self) -> bool:
         return self.role == UserRole.TEACHER
+
+
+class VerificationCode(BaseModel):
+    """One emailed short code, or one issued handle, for one action.
+
+    Everything the product confirms out of band goes through this table:
+    verifying a new school, the second factor at sign-in, resetting a
+    forgotten password, and confirming a deletion that cannot be undone. They
+    differ only in `purpose`, so the checking, expiry, attempt counting and
+    single-use rules are written once.
+
+    The two secrets are hashed differently, and the difference is the point.
+    `code` is six digits - a million guesses - so it is stored through Django's
+    password hashers, which is what makes a stolen database useless. `challenge`
+    is 256 bits from `secrets` and is the column a lookup runs against, so it
+    gets a plain digest: there is nothing to brute-force, and a slow hash would
+    only turn an indexed lookup into a scan.
+    """
+
+    user = models.ForeignKey(
+        "users.User",
+        on_delete=models.CASCADE,
+        related_name="verification_codes",
+        verbose_name=_("user"),
+    )
+    purpose = models.CharField(
+        _("purpose"), max_length=32, choices=VerificationPurpose.choices, db_index=True
+    )
+    code_hash = models.CharField(_("code hash"), max_length=128, blank=True, editable=False)
+    challenge_hash = models.CharField(
+        _("challenge hash"), max_length=64, blank=True, editable=False, db_index=True
+    )
+
+    #: The row the action applies to, for purposes that act on one - the
+    #: teacher or student being deleted. A plain UUID rather than a foreign
+    #: key: `users` must not depend on `schools`, and a code outliving its
+    #: subject by a few minutes is handled by re-fetching, not by a constraint.
+    subject_id = models.UUIDField(_("subject"), null=True, blank=True)
+
+    expires_at = models.DateTimeField(_("expires at"))
+    attempts = models.PositiveSmallIntegerField(_("attempts"), default=0)
+    consumed_at = models.DateTimeField(_("consumed at"), null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("verification code")
+        verbose_name_plural = _("verification codes")
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "purpose"], name="verification_user_purpose_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.purpose} for {self.user_id}"
+
+    def is_live(self, now) -> bool:
+        """Unspent, unexpired, and not yet out of attempts."""
+        from apps.users.verification import MAX_ATTEMPTS
+
+        return self.consumed_at is None and self.expires_at > now and self.attempts < MAX_ATTEMPTS

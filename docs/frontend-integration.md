@@ -193,7 +193,7 @@ so that permissions, routing and the OpenAPI tags line up with each other.
 
 Registration and login are both two-step, with an emailed OTP.
 
-#### `POST /v1/school/auth/register/` — Planned
+#### `POST /v1/school/auth/register/` — Built
 
 Creates the school and its management login, then emails a code.
 
@@ -214,7 +214,7 @@ Creates the school and its management login, then emails a code.
 becomes the prefix of every student and teacher id this school ever issues. It
 **cannot be changed afterwards** — say so on the form.
 
-#### `POST /v1/school/auth/register/verify/` — Planned
+#### `POST /v1/school/auth/register/verify/` — Built
 
 ```json
 { "email": "admin@greenwood.edu.ng", "code": "492013" }
@@ -222,16 +222,23 @@ becomes the prefix of every student and teacher id this school ever issues. It
 
 `200` → `{ "access": "...", "refresh": "...", "school": { ... } }`
 
-#### `POST /v1/school/auth/login/` — Built (OTP step Planned)
+#### `POST /v1/school/auth/login/` — Built
 
 ```json
 { "email": "admin@greenwood.edu.ng", "password": "..." }
 ```
 
-`200` → `{ "otp_required": true, "challenge": "..." }` once OTP lands. Today it
-returns the token pair directly.
+`200` → `{ "otp_required": true, "challenge": "...", "expires_at": "..." }`
 
-#### `POST /v1/school/auth/login/verify/` — Planned
+**No token comes back from this call.** A correct password gets you a challenge
+and an emailed code, nothing more. Hold the challenge in memory for the second
+step — it is a bearer secret, so do not put it in `localStorage` or the URL.
+
+A wrong password, an address nobody has registered, and a *teacher* posting
+their credentials here all return the same `401` with the same message. Do not
+try to tell them apart in the UI; there is nothing to tell apart.
+
+#### `POST /v1/school/auth/login/verify/` — Built
 
 ```json
 { "challenge": "...", "code": "492013" }
@@ -239,17 +246,37 @@ returns the token pair directly.
 
 `200` → `{ "access": "...", "refresh": "...", "user": {...}, "school": {...} }`
 
-#### Password reset — Planned
+#### Password reset — Built
 
 ```
 POST /v1/school/auth/password/reset/request/   { email }        → always 200
-POST /v1/school/auth/password/reset/verify/    { email, code }  → { reset_token }
-POST /v1/school/auth/password/reset/confirm/   { reset_token, password }
+POST /v1/school/auth/password/reset/verify/    { email, code }  → { reset_token, expires_at }
+POST /v1/school/auth/password/reset/confirm/   { reset_token, password, password_confirm } → 204
 ```
 
 The request step returns `200` whether or not the address exists, so the form
 cannot be used to discover which schools are registered. Say "if that address
 is registered, a code is on its way" rather than "code sent".
+
+Three steps rather than two because the six digits arrive in a notification
+anyone glancing at the phone can read. `reset_token` is what actually sets the
+password, and it never leaves the browser that asked for it.
+
+#### Rules that apply to every code
+
+The same machinery is behind registration, sign-in, password reset and the
+deletion confirmations, so the UI can treat them identically:
+
+*   **Six digits, ten minutes.** Show the expiry; offer resend after it passes.
+*   **Single use, and issuing a new one retires the old.** A user who taps
+    resend twice has exactly one working code — the newest.
+*   **Five wrong attempts burn the code.** After that even the right digits are
+    refused, and the person must request a new one. Surface this rather than
+    letting them keep typing: "That code is no longer valid. Request a new one."
+*   **Every failure is one `400` with one message.** Expired, wrong, already
+    spent and out of attempts are deliberately indistinguishable.
+*   **These endpoints are rate limited** (15/min, shared across the group). A
+    `429` means slow down, not that anything is wrong with the code.
 
 ### 4.2 Profile
 
@@ -257,7 +284,7 @@ is registered, a code is on its way" rather than "code sent".
 |---|---|---|---|
 | `GET` | `/v1/school/profile/` | The acting school's record | Built |
 | `PATCH` | `/v1/school/profile/` | Name, logo, current session | Built |
-| `POST` | `/v1/school/profile/password/change/` | Change own password | Planned |
+| `POST` | `/v1/school/profile/password/change/` | Change own password | Built |
 
 `GET` returns:
 
@@ -281,8 +308,8 @@ rejected with `400`.
 | `GET` | `/v1/school/grades/` | Grades we define. Read-only, unpaginated | Built |
 | `GET` | `/v1/school/sessions/` | Academic sessions, unpaginated | Built |
 | `GET` | `/v1/school/classes/` | This school's own classes, unpaginated | Built |
-| `POST` | `/v1/school/classes/` | Create a class | Planned |
-| `DELETE` | `/v1/school/classes/{id}/` | Delete an empty class | Planned |
+| `POST` | `/v1/school/classes/` | Create a class | Built |
+| `DELETE` | `/v1/school/classes/{id}/` | Delete an empty class | Built |
 
 **Grades are ours, classes are theirs.** A school picks a grade from our list
 and names its own arm within it. The class picker is therefore a grade dropdown
@@ -303,11 +330,11 @@ rather than presenting a delete that fails.
 | `POST` | `/v1/school/teachers/` | Create teacher + login | Built |
 | `GET` | `/v1/school/teachers/{id}/` | One teacher | Built |
 | `PATCH` | `/v1/school/teachers/{id}/` | Update | Built |
-| `POST` | `/v1/school/teachers/{id}/disable/` | Revoke the login | Planned |
-| `POST` | `/v1/school/teachers/{id}/enable/` | Restore it | Planned |
-| `POST` | `/v1/school/teachers/{id}/password-reset/` | Email them a reset | Planned |
-| `POST` | `/v1/school/teachers/{id}/delete/request/` | Sends a 2FA code | Planned |
-| `POST` | `/v1/school/teachers/{id}/delete/confirm/` | `{ code }` | Planned |
+| `POST` | `/v1/school/teachers/{id}/disable/` | Revoke the login | Built |
+| `POST` | `/v1/school/teachers/{id}/enable/` | Restore it | Built |
+| `POST` | `/v1/school/teachers/{id}/password-reset/` | Email them a reset | Built |
+| `POST` | `/v1/school/teachers/{id}/delete/request/` | Sends a 2FA code | Built |
+| `POST` | `/v1/school/teachers/{id}/delete/confirm/` | `{ code }` | Built |
 
 `POST` takes `{ email, password, first_name, last_name, school_class? }` and
 returns the teacher including a generated `teacher_id`. **Surface that id
@@ -315,8 +342,22 @@ prominently** — it is what they sign in with, not their email.
 
 Creating a teacher requires a verified school email (`403` otherwise).
 
-Deletion is two-step behind an emailed code and never cascades: assessments
-they authored survive with the author cleared.
+**Disable is the common case; delete is not.** Disabling revokes the login and
+leaves everything they authored exactly where it is, and is one click to undo.
+Present it as the primary action and keep delete out of the way.
+
+Deletion is two-step. `delete/request/` emails a six-digit code **to the signed-in
+administrator, not to the teacher**, and `delete/confirm/` takes `{ code }`. Say
+who the code went to on the confirm dialog, or people will look in the wrong
+inbox. The code is bound to that one teacher: requesting a second deletion
+invalidates the first code, and confirming the wrong record returns `400`.
+
+Nothing they authored is destroyed. The teacher's row is hidden immediately and
+purged after 90 days; their assessments survive with the author cleared.
+
+`password-reset/` emails the teacher a code they can set a new password with —
+admin-triggered, because a teacher who cannot sign in is standing in front of
+someone who can.
 
 ### 4.5 Students
 
@@ -326,13 +367,13 @@ they authored survive with the author cleared.
 | `POST` | `/v1/school/students/` | Admit a student | Built |
 | `GET` | `/v1/school/students/{id}/` | One student | Built |
 | `PATCH` | `/v1/school/students/{id}/` | Update | Built |
-| `GET` | `/v1/school/students/{id}/fln/` | Levels + assessment scores | Planned |
-| `POST` | `/v1/school/students/{id}/disable/` | Disable | Planned |
-| `POST` | `/v1/school/students/{id}/enable/` | Re-enable | Planned |
-| `POST` | `/v1/school/students/{id}/delete/request/` | Sends a 2FA code | Planned |
-| `POST` | `/v1/school/students/{id}/delete/confirm/` | `{ code }` | Planned |
-| `POST` | `/v1/school/students/transfer/` | `{ student_ids, to_class }` | Planned |
-| `POST` | `/v1/school/students/transfer-class/` | `{ from_class, to_class }` | Planned |
+| `GET` | `/v1/school/students/{id}/fln/` | Levels + assessment scores | Built |
+| `POST` | `/v1/school/students/{id}/disable/` | Disable | Built |
+| `POST` | `/v1/school/students/{id}/enable/` | Re-enable | Built |
+| `POST` | `/v1/school/students/{id}/delete/request/` | Sends a 2FA code | Built |
+| `POST` | `/v1/school/students/{id}/delete/confirm/` | `{ code }` | Built |
+| `POST` | `/v1/school/students/transfer/` | `{ student_ids, to_class }` | Built |
+| `POST` | `/v1/school/students/transfer-class/` | `{ from_class, to_class }` | Built |
 
 `POST` takes first/last name, date of birth, gender, class, and guardian name,
 phone, email and relationship. **`guardian_email` is optional** — many guardians
@@ -345,7 +386,26 @@ sit an assessment (that is the assignment code).
 
 An **active student always has a class**; only a disabled one may sit outside
 the structure. The API enforces this, so a UI that lets someone clear a class
-without disabling first will hit a `400`.
+without disabling first will hit a `400` — and so will re-enabling a child who
+has no class, which is worth catching on the form.
+
+Deletion works exactly as it does for teachers: `delete/request/` emails a code
+to the signed-in administrator, `delete/confirm/` takes `{ code }`, and the row
+is hidden immediately rather than destroyed. A child's results cascade off that
+row, so the delay is doing real work — the purge finishes the job after 90 days.
+A removed child keeps their `student_id`; it is never reissued.
+
+**Transfers** come in two shapes, and the UI should too:
+
+```
+POST /v1/school/students/transfer/        { student_ids: [...], to_class }  → { moved, to_class }
+POST /v1/school/students/transfer-class/  { from_class, to_class }          → { moved, to_class }
+```
+
+The first is a multi-select on the roster; the second is the end-of-year move.
+Both refuse a class or a child belonging to another school with a `400`. The
+whole-class move writes **one** entry in the activity feed rather than one per
+child, so do not expect the feed to itemise it.
 
 `/fln/` returns the school-level view — levels and scores, not the full
 diagnostic breakdown, which is the teacher's view:
@@ -360,13 +420,15 @@ diagnostic breakdown, which is the teacher's view:
 }
 ```
 
-### 4.6 Activity feed — Planned
+### 4.6 Activity feed — Built
 
-`GET /v1/school/activity/?teacher=&student=&class=&action=&from=&to=`
+```
+GET /v1/school/activity/?teacher=&student=&school_class=&action=&occurred_from=&occurred_to=
+```
 
 Every core action in the product writes a row: papers published and assigned,
 sections started and submitted, children placed, groups formed, students
-transferred or disabled.
+transferred, disabled or removed.
 
 ```json
 {
@@ -374,27 +436,67 @@ transferred or disabled.
   "label": "Assessment started #KRPX7T",
   "description": "Amina Yusuf started Reading.",
   "teacher": null,
-  "student": { "id": "...", "full_name": "Amina Yusuf" },
-  "school_class": { "id": "...", "label": "Grade 2 A" },
+  "student": { "id": "...", "name": "Amina Yusuf" },
+  "school_class": { "id": "...", "name": "Grade 2 A" },
   "assessment": { "id": "...", "name": "Term 1 baseline" },
+  "metadata": {},
   "occurred_at": "2026-09-01T09:14:00Z"
 }
 ```
 
+Every related object is `{ id, name }` or `null` — the same shape whichever
+one it is, so one component renders all four.
+
 `label` and `description` are written server-side to be shown as-is. Do not
 reconstruct them from the ids — the wording is designed to survive the
-referenced rows being renamed or removed.
+referenced rows being renamed or removed, which for a log of deletions is most
+of the point.
+
+**This feed is cursor-paginated, not page-numbered.** Rows land in it while
+someone is reading, so an offset would skip and repeat entries. The envelope is
+`{ next, previous, results }` with opaque cursor URLs and **no `count`** — build
+an infinite scroll or a "load more", not numbered controls. Everything else in
+this API uses the page-number envelope from §2.
+
+`action` must be one of the values in `ActivityAction`; an unknown one is a
+`400` rather than a silently ignored filter. `occurred_from` and `occurred_to`
+are ISO-8601 timestamps.
 
 ### 4.7 Overview — Built
 
 `GET /v1/school/overview/` → counts of students, teachers and assessments,
-active assessments, a status breakdown, average graded score, and the current
-session label.
+active assessments, a status breakdown, **level distribution**, average graded
+score, and the current session label.
 
-> **Design note.** This currently leads with an average score. Once placement
-> lands it should lead with **level distribution** — how many children sit at
-> each of Levels 1–5, per domain. That is the number a school acts on; an
-> average across two independent domains is close to meaningless.
+```json
+{
+  "students": 240, "teachers": 12,
+  "assessments": 8, "active_assessments": 2,
+  "assessment_status_breakdown": { "draft": 3, "published": 3, "closed": 2 },
+  "level_distribution": {
+    "levels": {
+      "literacy": { "1": 41, "2": 88, "3": 52, "4": 19, "5": 4 },
+      "numeracy": { "1": 30, "2": 74, "3": 61, "4": 28, "5": 11 }
+    },
+    "unplaced": { "literacy": 36, "numeracy": 36 }
+  },
+  "average_graded_score": "64.20",
+  "current_session": "2025/2026"
+}
+```
+
+**Lead the page with `level_distribution`.** It is the number a school acts on:
+two bar charts, literacy and numeracy side by side, Levels 1–5 across the
+bottom. Every level is keyed even at zero, so plot them all — dropping empty
+levels makes the spread look narrower than it is.
+
+`unplaced` is per domain and counts active children no assessment has reached
+yet. It is usually the most actionable figure on the dashboard, so give it a
+line of its own rather than folding it into the chart.
+
+`average_graded_score` is kept because a school that has always had one will
+look for it, but it averages across two independent abilities and describes
+neither. Do not give it the headline.
 
 ---
 
@@ -1132,8 +1234,8 @@ frontend routes.
 | Route | Status | Notes |
 |---|---|---|
 | `/login` role chooser | Keep | Two roles only — product admin is not a public login |
-| `/login/school-admin` | **Rewire** | New path; add the OTP step |
-| `/login/verify-device` | **Rewire** | → `/v1/school/auth/login/verify/` |
+| `/login/school-admin` | **Rewire** | New path. Two steps: password returns a `challenge`, never a token. |
+| `/login/verify-device` | **Rewire** | → `/v1/school/auth/login/verify/`. Posts `{ challenge, code }` — the challenge from the previous step, held in memory. |
 | `/login/teacher` | **Change** | **Field is `teacher_id`, not email.** Single field plus password. Label it "Teacher ID" and show the format, e.g. `GHS-T-00007`. |
 | — | **Add** | `/login/teacher/forgot-password` |
 | — | **Add** | `/login/school-admin/forgot-password` |
@@ -1146,18 +1248,18 @@ school.
 
 | Route | Status | Notes |
 |---|---|---|
-| `/school-admin/dashboard` | **Revise** | Lead with level distribution once placement lands, not an average score |
+| `/school-admin/dashboard` | **Revise** | Lead with `level_distribution` — two charts, literacy and numeracy — and the `unplaced` count. The average is secondary. |
 | `/school-admin/teachers` | Keep | Show `teacher_id` in the table — it is their sign-in |
 | `/school-admin/teachers/new` | Keep | Show the generated id on success, with a copy control |
-| `/school-admin/teachers/:id` | **Extend** | Add disable/enable, trigger password reset, 2FA delete |
+| `/school-admin/teachers/:id` | **Extend** | Disable/enable as the primary action; password reset; two-step delete behind a code emailed to *you*, not to them |
 | `/school-admin/students` | Keep | Add an active/disabled filter |
 | `/school-admin/students/new` | **Change** | Never ask for a student id — it is generated. Show it on success. |
-| `/school-admin/students/:id` | **Extend** | Add the FLN panel (two levels, side by side), disable/enable, 2FA delete |
+| `/school-admin/students/:id` | **Extend** | FLN panel (two levels, side by side) from `/fln/`; disable/enable; two-step delete |
 | `/school-admin/classes` | Keep | |
-| `/school-admin/classes/new` | **Change** | Grade dropdown (ours) + arm name (theirs) |
+| `/school-admin/classes/new` | **Change** | Grade dropdown (ours) + arm name (theirs) → `POST /v1/school/classes/` |
 | `/school-admin/classes/:id` | **Extend** | Refuse delete while occupied; link to transfer |
-| — | **Add** | `/school-admin/students/transfer` — multi-select and whole-class modes |
-| — | **Add** | `/school-admin/activity` — the filterable feed |
+| — | **Add** | `/school-admin/students/transfer` — two modes, one per endpoint: multi-select and whole-class |
+| — | **Add** | `/school-admin/activity` — the filterable feed. **Cursor-paginated**: infinite scroll or "load more", no page numbers. |
 | `/school-admin/settings` | Keep | Abbreviation must be read-only |
 
 ### 7.4 Teacher
@@ -1285,6 +1387,34 @@ assessments/create/assign  POST .../assignments/  { class_ids: [...] }
 /school-admin/students/new POST /v1/school/students/                      → student_id issued
 ```
 
+### School admin: signing in again
+
+```
+/login/school-admin        POST /v1/school/auth/login/          → { challenge }, code emailed
+/login/verify-device       POST /v1/school/auth/login/verify/   → tokens
+```
+
+Hold `challenge` in memory between the two. A `400` on the second step means
+"request a new code", whatever actually went wrong.
+
+### School admin: removing a child
+
+```
+/school-admin/students/:id POST .../students/{id}/delete/request/   → code emailed to YOU
+  confirm dialog           POST .../students/{id}/delete/confirm/   { code } → 204
+```
+
+The child disappears from every list at once. Their results are destroyed 90
+days later by the retention purge, not immediately — which is what makes a
+misclick survivable.
+
+### School admin: end of year
+
+```
+/school-admin/students/transfer  POST /v1/school/students/transfer-class/  { from_class, to_class }
+/school-admin/classes/:id        DELETE /v1/school/classes/{id}/           → 204 once empty
+```
+
 ---
 
 ## 9. Things to keep out of the UI
@@ -1314,7 +1444,7 @@ designs:
 | Question | Blocks |
 |---|---|
 | Should a teacher be able to send a link to a child with no guardian contact, by printing the code instead? | Assignment page fallbacks |
-| Are teacher password resets self-service, admin-triggered, or both? | Login page scope |
+| Are teacher password resets self-service, admin-triggered, or both? | Login page scope. **Admin-triggered is built** (`/teachers/{id}/password-reset/`); whether the teacher login page also offers self-service is still open. |
 | Does the school admin see individual assessment results, or only levels? | `/students/{id}/fln/` shape |
 | Should the runner work on a phone, or tablet and up only? | Layout minimums |
 | What happens if a child's session expires mid-section — resume, or restart? | Runner error handling |

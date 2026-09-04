@@ -9,7 +9,9 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
+from apps.activities.models import Activity
 from apps.assessments.models import Assessment
+from apps.common.enums import ActivityAction
 from apps.media_assets.models import MediaAsset
 from apps.schools.enums import ClassSystem
 from apps.schools.models import (
@@ -153,6 +155,107 @@ class SchoolSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "abbreviation", "created_at", "updated_at"]
 
 
+class RegistrationStartedSerializer(serializers.Serializer):
+    """What signup returns. No tokens: the account is not usable until the
+    code that just went to that address comes back."""
+
+    id = serializers.UUIDField()
+    email = serializers.EmailField()
+    otp_sent = serializers.BooleanField()
+
+
+class EmailCodeSerializer(serializers.Serializer):
+    """Verifying something addressed by email - registration, password reset."""
+
+    email = serializers.EmailField()
+    code = serializers.CharField(max_length=16, trim_whitespace=True)
+
+    def validate_email(self, value: str) -> str:
+        return value.lower().strip()
+
+
+class EmailOnlySerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value: str) -> str:
+        return value.lower().strip()
+
+
+class LoginStartSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, style={"input_type": "password"})
+
+    def validate_email(self, value: str) -> str:
+        return value.lower().strip()
+
+
+class LoginChallengeSerializer(serializers.Serializer):
+    """The interim answer to a correct password. Deliberately says nothing
+    about the account beyond that a code is on its way."""
+
+    otp_required = serializers.BooleanField(default=True)
+    challenge = serializers.CharField()
+    expires_at = serializers.DateTimeField()
+
+
+class ChallengeCodeSerializer(serializers.Serializer):
+    challenge = serializers.CharField()
+    code = serializers.CharField(max_length=16, trim_whitespace=True)
+
+
+class ResetTokenSerializer(serializers.Serializer):
+    reset_token = serializers.CharField()
+    expires_at = serializers.DateTimeField()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    reset_token = serializers.CharField()
+    password = serializers.CharField(write_only=True, style={"input_type": "password"})
+    password_confirm = serializers.CharField(write_only=True, style={"input_type": "password"})
+
+    def validate(self, attrs: dict) -> dict:
+        if attrs["password"] != attrs["password_confirm"]:
+            raise serializers.ValidationError({"password_confirm": "Passwords do not match."})
+        _validate_password_strength(attrs["password"])
+        return attrs
+
+
+class PasswordChangeSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
+
+    def validate_new_password(self, value: str) -> str:
+        return _validate_password_strength(value)
+
+
+class ConfirmationCodeSerializer(serializers.Serializer):
+    """The second step of a deletion."""
+
+    code = serializers.CharField(max_length=16, trim_whitespace=True)
+
+
+class AcceptedSerializer(serializers.Serializer):
+    """A step that has started something out of band.
+
+    `detail` is written to be shown as-is, and says what the person should do
+    next rather than what the server did.
+    """
+
+    detail = serializers.CharField()
+
+
+# ---------------------------------------------------------------------------
+# Classes
+# ---------------------------------------------------------------------------
+
+
+class SchoolClassWriteSerializer(serializers.Serializer):
+    """A school names its own arm within one of our grades."""
+
+    grade = serializers.PrimaryKeyRelatedField(queryset=Grade.objects.all())
+    name = serializers.CharField(max_length=16)
+
+
 # ---------------------------------------------------------------------------
 # Teachers
 # ---------------------------------------------------------------------------
@@ -253,6 +356,114 @@ class StudentWriteSerializer(serializers.ModelSerializer):
         ]
 
 
+class StudentTransferSerializer(serializers.Serializer):
+    """Named children into one class."""
+
+    student_ids = serializers.ListField(
+        child=serializers.UUIDField(), allow_empty=False, max_length=500
+    )
+    to_class = serializers.PrimaryKeyRelatedField(queryset=SchoolClass.objects.all())
+
+
+class ClassTransferSerializer(serializers.Serializer):
+    """A whole class at once - the end-of-year move."""
+
+    from_class = serializers.PrimaryKeyRelatedField(queryset=SchoolClass.objects.all())
+    to_class = serializers.PrimaryKeyRelatedField(queryset=SchoolClass.objects.all())
+
+
+class TransferResultSerializer(serializers.Serializer):
+    moved = serializers.IntegerField()
+    to_class = SchoolClassSerializer()
+
+
+class StudentResultSummarySerializer(serializers.Serializer):
+    assessment = serializers.CharField()
+    date = serializers.DateTimeField(allow_null=True)
+    percentage = serializers.DecimalField(max_digits=5, decimal_places=2, allow_null=True)
+    status = serializers.CharField()
+
+
+class StudentFLNSerializer(serializers.Serializer):
+    """Levels and scores. The subskill breakdown is the teacher's view."""
+
+    student = StudentSerializer()
+    literacy_level = serializers.IntegerField(allow_null=True)
+    numeracy_level = serializers.IntegerField(allow_null=True)
+    last_assessed_at = serializers.DateTimeField(allow_null=True)
+    recent_results = StudentResultSummarySerializer(many=True)
+
+
+# ---------------------------------------------------------------------------
+# Activity
+# ---------------------------------------------------------------------------
+
+
+class ActivityActorSerializer(serializers.Serializer):
+    """The minimum needed to render a name and link to a record."""
+
+    id = serializers.UUIDField()
+    name = serializers.CharField()
+
+
+class ActivitySerializer(serializers.ModelSerializer):
+    """`label` and `description` are shown as written.
+
+    They are composed when the action happens rather than rebuilt from the
+    foreign keys at read time, so an entry still reads correctly after the row
+    it refers to has been renamed or removed - which, for a log of deletions,
+    is most of the point.
+    """
+
+    teacher = serializers.SerializerMethodField()
+    student = serializers.SerializerMethodField()
+    school_class = serializers.SerializerMethodField()
+    assessment = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Activity
+        fields = [
+            "id",
+            "action",
+            "label",
+            "description",
+            "teacher",
+            "student",
+            "school_class",
+            "assessment",
+            "metadata",
+            "occurred_at",
+        ]
+        read_only_fields = fields
+
+    def _named(self, row, name: str) -> dict | None:
+        return None if row is None else {"id": str(row.pk), "name": name}
+
+    def get_teacher(self, obj: Activity) -> dict | None:
+        return self._named(obj.teacher, obj.teacher.full_name if obj.teacher else "")
+
+    def get_student(self, obj: Activity) -> dict | None:
+        return self._named(obj.student, obj.student.full_name if obj.student else "")
+
+    def get_school_class(self, obj: Activity) -> dict | None:
+        return self._named(obj.school_class, str(obj.school_class) if obj.school_class else "")
+
+    def get_assessment(self, obj: Activity) -> dict | None:
+        return self._named(obj.assessment, obj.assessment.name if obj.assessment else "")
+
+
+class ActivityFilterSerializer(serializers.Serializer):
+    """Query parameters for the feed. Declared so the schema documents them
+    and so a malformed date is a 400 rather than a silently ignored filter."""
+
+    teacher = serializers.UUIDField(required=False)
+    student = serializers.UUIDField(required=False)
+    school_class = serializers.UUIDField(required=False)
+    action = serializers.ChoiceField(choices=ActivityAction.choices, required=False)
+    occurred_from = serializers.DateTimeField(required=False)
+    occurred_to = serializers.DateTimeField(required=False)
+
+
 # ---------------------------------------------------------------------------
 # Oversight
 # ---------------------------------------------------------------------------
@@ -280,13 +491,26 @@ class AssessmentOversightSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class LevelDistributionSerializer(serializers.Serializer):
+    """Children per level, per domain, plus those no assessment has reached."""
+
+    levels = serializers.DictField(child=serializers.DictField(child=serializers.IntegerField()))
+    unplaced = serializers.DictField(child=serializers.IntegerField())
+
+
 class SchoolOverviewSerializer(serializers.Serializer):
-    """Read-only dashboard payload; declared for the OpenAPI schema."""
+    """Read-only dashboard payload; declared for the OpenAPI schema.
+
+    `level_distribution` is the headline. The average below it is kept because
+    a school that has always had one will look for it, but it averages across
+    two independent abilities and describes neither.
+    """
 
     students = serializers.IntegerField()
     teachers = serializers.IntegerField()
     assessments = serializers.IntegerField()
     active_assessments = serializers.IntegerField()
     assessment_status_breakdown = serializers.DictField(child=serializers.IntegerField())
+    level_distribution = LevelDistributionSerializer()
     average_graded_score = serializers.DecimalField(max_digits=7, decimal_places=2, allow_null=True)
     current_session = serializers.CharField(allow_null=True)

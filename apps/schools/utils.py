@@ -30,7 +30,10 @@ def generate_student_id(school) -> str:
     from apps.schools.models import Student
 
     prefix = f"{school.abbreviation.upper()}-"
-    existing = Student.objects.filter(student_id__istartswith=prefix).values_list(
+    # `all_objects`, so a soft-deleted child still holds their number. Their
+    # row is still in the table until the purge runs, and the unique constraint
+    # does not know the difference.
+    existing = Student.all_objects.filter(student_id__istartswith=prefix).values_list(
         "student_id", flat=True
     )
     return f"{prefix}{_next_sequence(existing, prefix):04d}"
@@ -41,7 +44,7 @@ def generate_teacher_id(school) -> str:
     from apps.schools.models import Teacher
 
     prefix = f"{school.abbreviation.upper()}-T"
-    existing = Teacher.objects.filter(teacher_id__istartswith=prefix).values_list(
+    existing = Teacher.all_objects.filter(teacher_id__istartswith=prefix).values_list(
         "teacher_id", flat=True
     )
     return f"{prefix}{_next_sequence(existing, prefix):03d}"

@@ -18,6 +18,7 @@ from apps.common.enums import UserRole
 
 if TYPE_CHECKING:
     from apps.schools.models import School, Teacher
+    from apps.users.models import User
 
 
 def acting_school(request: Request) -> "School":
@@ -33,6 +34,15 @@ def acting_school(request: Request) -> "School":
 def acting_teacher(request: Request) -> "Teacher":
     """The teacher behind the request, guaranteed by `IsTeacher`."""
     return request.user.teacher  # type: ignore[union-attr]
+
+
+def acting_user(request: Request) -> "User":
+    """The signed-in account, for recording who did something.
+
+    Same narrowing as `acting_school`: a permission class has already refused
+    the anonymous case, so this states that once instead of at every call.
+    """
+    return request.user  # type: ignore[return-value]
 
 
 class RoleRequired(BasePermission):
